@@ -2,6 +2,13 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
+  <script>
+    // Os servidores de vídeo do provedor só entregam via HTTP.
+    // Em páginas HTTPS o navegador bloqueia o vídeo, então redireciona para a versão HTTP.
+    if (location.hostname.indexOf('vercel.app') !== -1) {
+      location.replace('http://canalplus-tv.surge.sh/');
+    }
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Canal+ | Web & Smart TV Player</title>
   <link rel="stylesheet" href="css/style.css?v=4">

@@ -1,10 +1,10 @@
 // js/api.js - Xtream Codes API Client with Automatic Multi-DNS Detection
 const XtreamApi = {
   SERVERS: [
-    'https://5tv.store',
-    'http://5tv.store',
-    'https://plus.lat',
     'http://plus.lat',
+    'https://plus.lat',
+    'http://5tv.store',
+    'https://5tv.store',
     'http://imagenshd.top',
     'http://canal231.com'
   ],
