@@ -6,7 +6,7 @@ echo ==============================================
 echo  Publicando em http://canalplus-tv.surge.sh
 echo  Na primeira vez: digite um e-mail e crie uma senha.
 echo ==============================================
-call npx --yes surge ./ canalplus-tv.surge.sh
+call npx --yes surge ./ canalplus-tv.surge.sh --force http
 echo.
 echo Pronto! Abra na TV: http://canalplus-tv.surge.sh
 pause
