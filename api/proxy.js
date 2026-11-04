@@ -28,21 +28,36 @@ export default async function handler(req, res) {
       forwardHeaders['Range'] = req.headers.range;
     }
 
-    const targetRes = await fetch(decodedUrl, {
-      headers: forwardHeaders,
-      redirect: 'follow'
-    });
+    // Manual redirect follower so headers (User-Agent, Range) are NEVER stripped across origins/protocols
+    let currentUrl = decodedUrl;
+    let targetRes;
+    let redirects = 0;
+
+    while (redirects < 5) {
+      targetRes = await fetch(currentUrl, {
+        headers: forwardHeaders,
+        redirect: 'manual'
+      });
+
+      if (targetRes.status >= 300 && targetRes.status < 400 && targetRes.headers.get('location')) {
+        const loc = targetRes.headers.get('location');
+        currentUrl = new URL(loc, currentUrl).href;
+        redirects++;
+      } else {
+        break;
+      }
+    }
 
     let contentType = targetRes.headers.get('content-type') || 'application/octet-stream';
 
     // Normalize video content types for browser compatibility
-    if (decodedUrl.includes('.mp4') || decodedUrl.includes('/movie/') || decodedUrl.includes('/series/')) {
+    if (currentUrl.includes('.mp4') || currentUrl.includes('/movie/') || currentUrl.includes('/series/')) {
       if (!contentType.includes('video/') && !contentType.includes('mpegurl')) {
         contentType = 'video/mp4';
       }
-    } else if (decodedUrl.includes('.m3u8')) {
+    } else if (currentUrl.includes('.m3u8')) {
       contentType = 'application/vnd.apple.mpegurl';
-    } else if (decodedUrl.includes('.ts')) {
+    } else if (currentUrl.includes('.ts')) {
       contentType = 'video/mp2t';
     }
 
@@ -56,18 +71,16 @@ export default async function handler(req, res) {
       res.setHeader('Content-Length', targetRes.headers.get('content-length'));
     }
 
-    // 1. If it's an HLS M3U8 Playlist, rewrite relative segment paths
-    if (decodedUrl.includes('.m3u8') || contentType.includes('mpegurl') || contentType.includes('application/x-mpegURL')) {
+    // 1. If it's an HLS M3U8 Playlist, rewrite segment paths accurately using standard URL resolution
+    if (currentUrl.includes('.m3u8') || decodedUrl.includes('.m3u8') || contentType.includes('mpegurl') || contentType.includes('application/x-mpegURL')) {
       const text = await targetRes.text();
-      const finalUrl = targetRes.url || decodedUrl;
-      const baseUrl = finalUrl.substring(0, finalUrl.lastIndexOf('/') + 1);
 
       const rewritten = text.split('\n').map(line => {
         const trimmed = line.trim();
         if (trimmed && !trimmed.startsWith('#')) {
           let fullUrl = trimmed;
           if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
-            fullUrl = baseUrl + trimmed;
+            fullUrl = new URL(trimmed, currentUrl).href;
           }
           return `/api/proxy?url=${encodeURIComponent(fullUrl)}`;
         }
@@ -78,7 +91,7 @@ export default async function handler(req, res) {
     }
 
     // 2. If it's a JSON response (Xtream Codes API)
-    if (contentType.includes('application/json') || decodedUrl.includes('player_api.php')) {
+    if (contentType.includes('application/json') || currentUrl.includes('player_api.php') || decodedUrl.includes('player_api.php')) {
       const text = await targetRes.text();
       return res.status(targetRes.status).send(text);
     }
