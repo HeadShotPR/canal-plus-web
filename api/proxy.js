@@ -27,11 +27,21 @@ export default async function handler(req, res) {
       forwardHeaders['Range'] = req.headers.range;
     }
 
-    // SPECIAL HANDLING FOR LIVE STREAMS:
-    // If it's a live M3U8, resolve the 302 redirect from the IPTV master server
-    // and redirect the browser directly to the HTTPS CDN node!
-    // This allows the browser to stream directly using its residential IP with zero 403 blocks!
-    if (decodedUrl.includes('/live/') && decodedUrl.includes('.m3u8')) {
+    // UNIFIED REDIRECT PIPELINE FOR LIVE, MOVIES, AND SERIES:
+    // Resolves the 302 redirect directly from the master Xtream Codes server (plus.lat)
+    // and sends the browser/Smart TV directly to the media delivery node.
+    // 1. Avoids 403 Forbidden caused by datacenter firewall IP blocking.
+    // 2. Plays directly using the user's home/residential IP.
+    // 3. No 50MB Vercel serverless payload limits or 10s execution timeouts.
+    const isStream = decodedUrl.includes('/live/') ||
+                     decodedUrl.includes('/movie/') ||
+                     decodedUrl.includes('/series/') ||
+                     decodedUrl.includes('.m3u8') ||
+                     decodedUrl.includes('.mp4') ||
+                     decodedUrl.includes('.mkv') ||
+                     decodedUrl.includes('.ts');
+
+    if (isStream) {
       try {
         const initRes = await fetch(decodedUrl, {
           headers: forwardHeaders,
@@ -40,11 +50,20 @@ export default async function handler(req, res) {
 
         if (initRes.status >= 300 && initRes.status < 400 && initRes.headers.get('location')) {
           let cdnLocation = initRes.headers.get('location');
-          // Convert HTTP to HTTPS and remove port 80 so it's 100% secure
-          cdnLocation = cdnLocation.replace('http://', 'https://').replace(':80/', '/');
-          
+
+          // If relative redirect, make absolute
+          if (!cdnLocation.startsWith('http://') && !cdnLocation.startsWith('https://')) {
+            cdnLocation = new URL(cdnLocation, decodedUrl).href;
+          }
+
+          // For CDN nodes with valid HTTPS certificates (like sdef4.site), convert to HTTPS
+          if (cdnLocation.includes('sdef4.site')) {
+            cdnLocation = cdnLocation.replace('http://', 'https://').replace(':80/', '/');
+          }
+
           res.setHeader('Location', cdnLocation);
           res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('Access-Control-Expose-Headers', 'Location');
           return res.status(302).end();
         }
       } catch (e) {
