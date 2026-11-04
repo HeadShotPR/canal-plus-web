@@ -5,7 +5,7 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range, X-Requested-With');
-  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges');
+  res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range, Accept-Ranges, Location');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
@@ -19,7 +19,6 @@ export default async function handler(req, res) {
   try {
     const decodedUrl = decodeURIComponent(url);
 
-    // Forward range header if present for seeking/scrubbing
     const forwardHeaders = {
       'User-Agent': 'IPTVSmartersPro/3.1.5.1 (Android)',
       'Accept': '*/*'
@@ -28,7 +27,32 @@ export default async function handler(req, res) {
       forwardHeaders['Range'] = req.headers.range;
     }
 
-    // Manual redirect follower so headers (User-Agent, Range) are NEVER stripped across origins/protocols
+    // SPECIAL HANDLING FOR LIVE STREAMS:
+    // If it's a live M3U8, resolve the 302 redirect from the IPTV master server
+    // and redirect the browser directly to the HTTPS CDN node!
+    // This allows the browser to stream directly using its residential IP with zero 403 blocks!
+    if (decodedUrl.includes('/live/') && decodedUrl.includes('.m3u8')) {
+      try {
+        const initRes = await fetch(decodedUrl, {
+          headers: forwardHeaders,
+          redirect: 'manual'
+        });
+
+        if (initRes.status >= 300 && initRes.status < 400 && initRes.headers.get('location')) {
+          let cdnLocation = initRes.headers.get('location');
+          // Convert HTTP to HTTPS and remove port 80 so it's 100% secure
+          cdnLocation = cdnLocation.replace('http://', 'https://').replace(':80/', '/');
+          
+          res.setHeader('Location', cdnLocation);
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          return res.status(302).end();
+        }
+      } catch (e) {
+        // Fall back to standard pipeline if redirect failed
+      }
+    }
+
+    // Manual redirect follower so headers are preserved
     let currentUrl = decodedUrl;
     let targetRes;
     let redirects = 0;
@@ -50,7 +74,6 @@ export default async function handler(req, res) {
 
     let contentType = targetRes.headers.get('content-type') || 'application/octet-stream';
 
-    // Normalize video content types for browser compatibility
     if (currentUrl.includes('.mp4') || currentUrl.includes('/movie/') || currentUrl.includes('/series/')) {
       if (!contentType.includes('video/') && !contentType.includes('mpegurl')) {
         contentType = 'video/mp4';
@@ -71,7 +94,7 @@ export default async function handler(req, res) {
       res.setHeader('Content-Length', targetRes.headers.get('content-length'));
     }
 
-    // 1. If it's an HLS M3U8 Playlist, rewrite segment paths accurately using standard URL resolution
+    // If M3U8 Playlist
     if (currentUrl.includes('.m3u8') || decodedUrl.includes('.m3u8') || contentType.includes('mpegurl') || contentType.includes('application/x-mpegURL')) {
       const text = await targetRes.text();
 
@@ -90,13 +113,13 @@ export default async function handler(req, res) {
       return res.status(targetRes.status).send(rewritten);
     }
 
-    // 2. If it's a JSON response (Xtream Codes API)
+    // JSON response
     if (contentType.includes('application/json') || currentUrl.includes('player_api.php') || decodedUrl.includes('player_api.php')) {
       const text = await targetRes.text();
       return res.status(targetRes.status).send(text);
     }
 
-    // 3. For video streams, TS chunks, and movie media, stream directly with pipe
+    // Stream video/binary
     res.status(targetRes.status);
     if (targetRes.body) {
       const nodeStream = Readable.fromWeb(targetRes.body);
