@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Canal+ | Web & Smart TV Player</title>
+  <link rel="stylesheet" href="css/style.css?v=4">
+  <!-- HLS.js for Live & VOD Video Playback -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+</head>
+<body>
+
+  <!-- ==========================================
+       1. TELA DE LOGIN
+  =========================================== -->
+  <div id="login-screen">
+    <div class="login-card">
+      <div class="brand-badge">
+        <span class="logo-icon">📺</span>
+        <h1>CANAL<span>+</span></h1>
+      </div>
+
+      <div class="form-group">
+        <label for="login-user">Usuário</label>
+        <input type="text" id="login-user" class="form-input focusable" placeholder="Seu usuário" autocomplete="off">
+      </div>
+
+      <div class="form-group">
+        <label for="login-pass">Senha</label>
+        <input type="password" id="login-pass" class="form-input focusable" placeholder="Sua senha" autocomplete="off">
+      </div>
+
+      <button id="btn-login" class="btn-primary focusable">
+        <span>ENTRAR NO CANAL+</span> ▶
+      </button>
+
+      <div id="login-msg" class="login-msg"></div>
+
+      <!-- BOTÃO WHATSAPP CHAMATIVO -->
+      <div class="btn-whatsapp-box">
+        <a href="https://wa.me/5544988223365?text=Ol%C3%A1%2C%20quero%20ter%20acesso%20ao%20login%20e%20senha" target="_blank" class="btn-whatsapp focusable">
+          <span style="font-size: 18px;">💬</span>
+          <span>Para ter acesso ao login e senha clique aqui</span>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================
+       2. APLICATIVO PRINCIPAL
+  =========================================== -->
+  <div id="app-screen" style="display: none;">
+    
+    <!-- Barra Superior -->
+    <header class="top-navbar">
+      <div class="nav-left">
+        <div class="app-logo">CANAL<span>+</span></div>
+        <nav class="nav-tabs">
+          <button class="nav-tab-btn focusable active" data-section="live">
+            <span>📺</span> Ao Vivo
+          </button>
+          <button class="nav-tab-btn focusable" data-section="movies">
+            <span>🎬</span> Filmes
+          </button>
+          <button class="nav-tab-btn focusable" data-section="series">
+            <span>🍿</span> Séries
+          </button>
+          <button class="nav-tab-btn tab-games focusable" data-section="games">
+            <span>🎮</span> Jogos Retrô
+          </button>
+        </nav>
+      </div>
+
+      <div class="nav-right">
+        <div class="user-badge">
+          <span id="user-name" class="user-name">Usuário</span>
+          <span id="user-status" class="user-status">Ativo</span>
+        </div>
+        <button id="btn-logout" class="btn-icon focusable" title="Sair da Conta">
+          🚪
+        </button>
+      </div>
+    </header>
+
+    <!-- Corpo do App -->
+    <main class="app-body">
+      
+      <!-- Barra Lateral de Categorias -->
+      <aside class="categories-sidebar">
+        <div class="sidebar-header">
+          <div class="search-box">
+            <input type="text" id="search-input" class="search-input focusable" placeholder="🔍 Buscar canal, filme...">
+          </div>
+        </div>
+        <div id="categories-list" class="categories-list">
+          <!-- Categorias inseridas dinamicamente via JS -->
+        </div>
+      </aside>
+
+      <!-- Grade Principal de Conteúdo -->
+      <section class="content-viewport">
+        <div class="content-header">
+          <h2 id="content-title" class="content-title">📺 Canais Ao Vivo</h2>
+          <span id="content-count" class="content-count">0 itens</span>
+        </div>
+        <div id="items-grid" class="items-grid live-mode">
+          <!-- Cards de canais / filmes inseridos via JS -->
+        </div>
+      </section>
+
+      <!-- Container do Arcade de Jogos Retrô -->
+      <div id="arcade-container">
+        <iframe id="arcade-iframe" src="" allowfullscreen></iframe>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- ==========================================
+       3. MODAL DE DETALHES (FILMES & SÉRIES)
+  =========================================== -->
+  <div id="detail-modal" class="modal-overlay">
+    <div class="modal-content">
+      <button id="modal-close-btn" class="modal-close-btn focusable">✕</button>
+      
+      <div class="modal-poster">
+        <img id="modal-poster" src="" alt="Capa">
+      </div>
+
+      <div class="modal-details">
+        <h2 id="modal-title" class="modal-title">Título</h2>
+        
+        <div class="modal-meta">
+          <span id="modal-year" class="meta-badge">2026</span>
+          <span id="modal-rating" class="meta-badge" style="color:#ffd700">★ 9.0</span>
+          <span id="modal-duration" class="meta-badge">1h 45m</span>
+          <span id="modal-genre" class="meta-badge">Ação</span>
+        </div>
+
+        <p id="modal-plot" class="modal-plot">Sinopse...</p>
+
+        <div class="modal-actions">
+          <button id="btn-watch" class="btn-watch focusable">
+            <span>▶</span> Assistir
+          </button>
+          <button id="btn-fav" class="btn-fav focusable">
+            Adicionar aos Favoritos
+          </button>
+        </div>
+
+        <!-- Seletor de Temporadas e Episódios (Para Séries) -->
+        <div id="episodes-container" class="episodes-container" style="display: none;">
+          <div id="seasons-bar" class="seasons-bar"></div>
+          <div id="episodes-list" class="episodes-list"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================
+       4. REPRODUTOR DE VÍDEO
+  =========================================== -->
+  <div id="player-overlay">
+    <video id="main-video" playsinline></video>
+
+    <!-- Topbar do Player -->
+    <div class="player-topbar">
+      <div id="player-title" class="player-title">Reproduzindo</div>
+      <button id="player-back-btn" class="btn-icon focusable" style="background: rgba(0,0,0,0.6);">
+        ✕ Fechar
+      </button>
+    </div>
+
+    <!-- Controles do Player -->
+    <div class="player-controls">
+      <div class="player-timeline-box">
+        <span id="player-time-current">00:00</span>
+        <input type="range" id="player-timeline" class="timeline-slider focusable" min="0" max="100" value="0">
+        <span id="player-time-total">00:00</span>
+      </div>
+
+      <div class="player-btns-row">
+        <button id="player-play-pause" class="player-btn play-btn focusable">
+          ⏸
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================
+       5. MODAL DE CONTROLE PARENTAL (PIN)
+  =========================================== -->
+  <div id="pin-modal" class="modal-overlay">
+    <div class="modal-content pin-dialog">
+      <h3 style="font-size:20px;margin-bottom:8px">🔒 Controle Parental</h3>
+      <p style="font-size:13px;color:var(--text-muted)">Digite o PIN de 4 dígitos para acessar este conteúdo:</p>
+      
+      <div class="pin-display">
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+        <div class="pin-dot"></div>
+      </div>
+
+      <div class="pin-keyboard">
+        <button class="pin-key focusable" data-val="1">1</button>
+        <button class="pin-key focusable" data-val="2">2</button>
+        <button class="pin-key focusable" data-val="3">3</button>
+        <button class="pin-key focusable" data-val="4">4</button>
+        <button class="pin-key focusable" data-val="5">5</button>
+        <button class="pin-key focusable" data-val="6">6</button>
+        <button class="pin-key focusable" data-val="7">7</button>
+        <button class="pin-key focusable" data-val="8">8</button>
+        <button class="pin-key focusable" data-val="9">9</button>
+        <button class="pin-key focusable" data-val="close" style="color:#ff5252">✕</button>
+        <button class="pin-key focusable" data-val="0">0</button>
+        <button class="pin-key focusable" data-val="back">⌫</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================
+       6. NOTIFICAÇÃO TOAST
+  =========================================== -->
+  <div id="toast" class="toast">Mensagem</div>
+
+  <!-- Scripts -->
+  <script src="js/favorites.js?v=4"></script>
+  <script src="js/parental.js?v=4"></script>
+  <script src="js/api.js?v=4"></script>
+  <script src="js/app.js?v=4"></script>
+</body>
+</html>
