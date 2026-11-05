@@ -197,17 +197,19 @@
   <!-- ==========================================
        5. MODAL DE CONTROLE PARENTAL (PIN)
   =========================================== -->
-  <div id="pin-modal" class="modal-overlay">
-    <div class="modal-content pin-dialog">
-      <h3 style="font-size:20px;margin-bottom:8px">🔒 Controle Parental</h3>
-      <p style="font-size:13px;color:var(--text-muted)">Digite o PIN de 4 dígitos para acessar este conteúdo:</p>
-      
+  <div id="pin-modal">
+    <div class="pin-card">
+      <div class="pin-lock">🔒</div>
+      <h3 id="pin-title">Conteúdo protegido</h3>
+      <p id="pin-subtitle">Digite a senha de 4 dígitos</p>
+
       <div class="pin-display">
         <div class="pin-dot"></div>
         <div class="pin-dot"></div>
         <div class="pin-dot"></div>
         <div class="pin-dot"></div>
       </div>
+      <div id="pin-error"></div>
 
       <div class="pin-keyboard">
         <button class="pin-key focusable" data-val="1">1</button>
@@ -219,12 +221,45 @@
         <button class="pin-key focusable" data-val="7">7</button>
         <button class="pin-key focusable" data-val="8">8</button>
         <button class="pin-key focusable" data-val="9">9</button>
-        <button class="pin-key focusable" data-val="close" style="color:#ff5252">✕</button>
+        <button class="pin-key pin-key-muted focusable" data-val="close">✕</button>
         <button class="pin-key focusable" data-val="0">0</button>
-        <button class="pin-key focusable" data-val="back">⌫</button>
+        <button class="pin-key pin-key-muted focusable" data-val="back">⌫</button>
       </div>
+
+      <button id="pin-change-btn" class="pin-link focusable">Alterar senha</button>
     </div>
   </div>
+  <style>
+    #pin-modal { display:none; position:fixed; inset:0; z-index:9999; align-items:center; justify-content:center;
+      background:rgba(0,0,0,.75); backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); font-family:inherit; }
+    #pin-modal .pin-card { width:320px; max-width:92vw; padding:28px 26px 18px; text-align:center; color:#fff;
+      background:linear-gradient(180deg,#1b2233,#121722); border:1px solid rgba(255,255,255,.08);
+      border-radius:22px; box-shadow:0 24px 60px rgba(0,0,0,.6); animation:pinIn .18s ease-out; }
+    #pin-modal .pin-lock { width:56px; height:56px; margin:0 auto 12px; border-radius:50%; display:flex;
+      align-items:center; justify-content:center; font-size:26px; background:rgba(0,200,255,.12); }
+    #pin-modal h3 { margin:0 0 4px; font-size:19px; font-weight:600; }
+    #pin-modal #pin-subtitle { margin:0; font-size:13px; color:#9aa4b5; min-height:18px; }
+    #pin-modal .pin-display { display:flex; justify-content:center; gap:16px; margin:22px 0 6px; }
+    #pin-modal .pin-dot { width:14px; height:14px; border-radius:50%; border:2px solid #4a5568;
+      background:transparent; transition:all .15s; }
+    #pin-modal .pin-dot.filled { background:#00c8ff; border-color:#00c8ff; box-shadow:0 0 10px rgba(0,200,255,.6); }
+    #pin-modal.pin-ok .pin-dot { background:#2ecc71; border-color:#2ecc71; box-shadow:none; }
+    #pin-modal #pin-error { height:18px; font-size:12px; color:#ff6b6b; margin-bottom:10px; }
+    #pin-modal .pin-display.shake { animation:pinShake .35s; }
+    #pin-modal .pin-display.shake .pin-dot { border-color:#ff6b6b; background:#ff6b6b; box-shadow:none; }
+    #pin-modal .pin-keyboard { display:grid; grid-template-columns:repeat(3,64px); gap:12px 18px; justify-content:center; }
+    #pin-modal .pin-key { width:64px; height:64px; border-radius:50%; border:none; cursor:pointer; font-size:24px;
+      font-weight:500; color:#fff; background:rgba(255,255,255,.06); transition:background .12s, transform .08s; outline:none; }
+    #pin-modal .pin-key:hover, #pin-modal .pin-key:focus { background:rgba(0,200,255,.25); }
+    #pin-modal .pin-key:focus { box-shadow:0 0 0 3px #00c8ff; }
+    #pin-modal .pin-key:active { transform:scale(.92); }
+    #pin-modal .pin-key-muted { background:transparent; color:#9aa4b5; font-size:20px; }
+    #pin-modal .pin-link { margin-top:16px; background:none; border:none; color:#00c8ff; font-size:13px;
+      cursor:pointer; padding:8px 12px; border-radius:8px; outline:none; }
+    #pin-modal .pin-link:hover, #pin-modal .pin-link:focus { background:rgba(0,200,255,.12); }
+    @keyframes pinShake { 0%,100%{transform:translateX(0)} 20%,60%{transform:translateX(-8px)} 40%,80%{transform:translateX(8px)} }
+    @keyframes pinIn { from{opacity:0; transform:scale(.95)} to{opacity:1; transform:scale(1)} }
+  </style>
 
   <!-- ==========================================
        6. NOTIFICAÇÃO TOAST
@@ -233,8 +268,8 @@
 
   <!-- Scripts -->
   <script src="js/favorites.js?v=4"></script>
-  <script src="js/parental.js?v=6"></script>
+  <script src="js/parental.js?v=7"></script>
   <script src="js/api.js?v=6"></script>
-  <script src="js/app.js?v=6"></script>
+  <script src="js/app.js?v=7"></script>
 </body>
 </html>

@@ -237,8 +237,7 @@ function renderCategories(cats) {
       if (isAdult) {
         const ok = await Parental.promptPin();
         if (!ok) {
-          showToast('PIN incorreto!');
-          return;
+          return; // cancelado pelo usuário
         }
       }
       selectCategory(c.category_id, item);
@@ -358,8 +357,7 @@ function createLiveCard(item) {
     if (Parental.isAdultName(item.name)) {
       const ok = await Parental.promptPin();
       if (!ok) {
-        showToast('PIN incorreto!');
-        return;
+        return; // cancelado pelo usuário
       }
     }
     const url = XtreamApi.getLiveUrl(item.stream_id || item.id);
@@ -395,8 +393,7 @@ async function openMediaModal(item, section) {
   if (Parental.isAdultName(item.name || item.title)) {
     const ok = await Parental.promptPin();
     if (!ok) {
-      showToast('PIN incorreto!');
-      return;
+      return; // cancelado pelo usuário
     }
   }
 
@@ -778,7 +775,10 @@ function setupTvKeys() {
 }
 
 function handleDpad(keyCode) {
-  const focusables = Array.from(document.querySelectorAll('.focusable:not([disabled])')).filter(el => {
+  // While the PIN modal is open, keep D-pad focus inside it
+  const pinModal = document.getElementById('pin-modal');
+  const scope = (pinModal && pinModal.style.display === 'flex') ? pinModal : document;
+  const focusables = Array.from(scope.querySelectorAll('.focusable:not([disabled])')).filter(el => {
     return el.offsetParent !== null;
   });
 
