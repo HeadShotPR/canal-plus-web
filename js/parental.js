@@ -6,7 +6,7 @@ const Parental = {
   ADULT_KEYWORDS: [
     'adult', 'xxx', 'porn', '+18', '18+', 'erotico', 'erótico',
     'playboy', 'venus', 'sexy', 'privé', 'prive', 'hustler',
-    'redlight', 'brazzers', 'penthouse', 'sex drive'
+    'redlight', 'brazzers', 'penthouse', 'sex drive', 'onlyfans', 'only fans'
   ],
 
   getPin() {

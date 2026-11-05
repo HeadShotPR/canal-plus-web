@@ -4,6 +4,7 @@ let currentCategory = 'all';
 let currentItems = [];
 let hlsInstance = null;
 let activeModalMedia = null;
+let adultCategoryIds = new Set();
 
 // DOM Elements
 const el = {
@@ -224,8 +225,10 @@ function renderCategories(cats) {
   el.categoriesList.appendChild(allItem);
 
   // 3. Demais Categorias
+  adultCategoryIds = new Set();
   cats.forEach(c => {
     const isAdult = Parental.isAdultName(c.category_name);
+    if (isAdult) adultCategoryIds.add(String(c.category_id));
     const item = document.createElement('div');
     item.className = 'cat-item focusable';
     item.dataset.id = c.category_id;
@@ -276,6 +279,14 @@ async function loadCategoryItems(catId) {
     }
 
     currentItems = items || [];
+    // "Todos" must not expose items from PIN-protected (adult) categories
+    if (catId === 'all' && adultCategoryIds.size > 0) {
+      currentItems = currentItems.filter(it => {
+        const ids = [it.category_id, ...(Array.isArray(it.category_ids) ? it.category_ids : [])]
+          .filter(x => x !== undefined && x !== null).map(String);
+        return !ids.some(id => adultCategoryIds.has(id));
+      });
+    }
     renderItems(currentItems);
   } catch (e) {
     el.itemsGrid.innerHTML = '<p style="padding:20px;color:#ff5252">Erro ao carregar conteúdo.</p>';
