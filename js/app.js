@@ -519,12 +519,14 @@ function showSeasonEpisodes(episodes) {
       <span style="font-size:12px;color:var(--accent-cyan)">Assistir ▶</span>
     `;
     item.onclick = () => {
-      closeMediaModal();
+      // Read series name BEFORE closing the modal (closeMediaModal clears activeModalMedia)
+      const seriesName = activeModalMedia ? (activeModalMedia.name || activeModalMedia.title || '') : '';
       const ext = ep.container_extension || 'mp4';
       const epId = ep.id || ep.stream_id;
       const playExt = (ext && ext.toLowerCase() !== 'mkv') ? ext.toLowerCase() : 'mp4';
       const url = XtreamApi.getEpisodeUrl(epId, playExt);
-      const epTitle = `${activeModalMedia.name || activeModalMedia.title} - E${ep.episode_num || ''}`;
+      const epTitle = `${seriesName} - E${ep.episode_num || ''}`;
+      closeMediaModal();
       playStream(url, epTitle, 'series');
     };
     el.episodesList.appendChild(item);
