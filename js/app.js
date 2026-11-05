@@ -41,9 +41,14 @@ const el = {
   playerTitle: document.getElementById('player-title'),
   playerPlayPause: document.getElementById('player-play-pause'),
   playerBackBtn: document.getElementById('player-back-btn'),
+  playerTimelineBox: document.getElementById('player-timeline-box'),
   playerTimeline: document.getElementById('player-timeline'),
   playerTimeCurrent: document.getElementById('player-time-current'),
   playerTimeTotal: document.getElementById('player-time-total'),
+  playerQualityBar: document.getElementById('player-quality-bar'),
+  qualityPillsRow: document.getElementById('quality-pills-row'),
+  btnAspectContain: document.getElementById('btn-aspect-contain'),
+  btnAspectFill: document.getElementById('btn-aspect-fill'),
   arcadeContainer: document.getElementById('arcade-container'),
   arcadeIframe: document.getElementById('arcade-iframe'),
   toast: document.getElementById('toast')
@@ -253,6 +258,83 @@ function selectCategory(catId, element) {
   loadCategoryItems(catId);
 }
 
+// --- Channel Grouper (Quality grouping for Live TV) ---
+const ChannelGrouper = {
+  QUALITY_REGEX: /[\s\(\[]+(4K|UHD|FHD[²2]?|HD[²2]?|SD[²2]?|HEVC|H\.265)[\)\]]?\s*$/i,
+
+  normalizeQuality(q) {
+    if (!q) return 'HD';
+    const upper = q.toUpperCase();
+    if (upper === 'FHD2') return 'FHD²';
+    if (upper === 'HD2') return 'HD²';
+    if (upper === 'SD2') return 'SD²';
+    if (upper === 'H.265') return 'HEVC';
+    return upper;
+  },
+
+  getQualityRank(q) {
+    const map = {
+      '4K': 1,
+      'UHD': 2,
+      'FHD': 3,
+      'FHD²': 4,
+      'HD': 5,
+      'HD²': 6,
+      'SD': 7,
+      'SD²': 8,
+      'HEVC': 9
+    };
+    return map[q] || 10;
+  },
+
+  extractQuality(name) {
+    if (!name) return { cleanName: '', quality: 'HD' };
+    const m = name.match(this.QUALITY_REGEX);
+    if (m) {
+      const rawQ = m[1];
+      const clean = name.slice(0, m.index).replace(/[\s\-\|:]+$/, '').trim();
+      return { cleanName: clean || name, quality: this.normalizeQuality(rawQ) };
+    }
+    return { cleanName: name.trim(), quality: 'HD' };
+  },
+
+  groupLiveStreams(streams) {
+    if (!Array.isArray(streams) || streams.length === 0) return [];
+    const groups = new Map();
+
+    for (const item of streams) {
+      const { cleanName, quality } = this.extractQuality(item.name);
+      const key = `${item.category_id || ''}_${cleanName.toLowerCase()}`;
+
+      if (!groups.has(key)) {
+        groups.set(key, { cleanName, variants: [] });
+      }
+
+      groups.get(key).variants.push({
+        quality,
+        rank: this.getQualityRank(quality),
+        stream_id: item.stream_id || item.id,
+        name: item.name,
+        item
+      });
+    }
+
+    const grouped = [];
+    for (const group of groups.values()) {
+      group.variants.sort((a, b) => a.rank - b.rank);
+      const primary = group.variants[0];
+
+      grouped.push({
+        ...primary.item,
+        displayName: group.cleanName || primary.item.name,
+        variants: group.variants
+      });
+    }
+
+    return grouped;
+  }
+};
+
 async function loadCategoryItems(catId) {
   el.itemsGrid.innerHTML = '<div class="spinner"></div>';
   el.itemsGrid.classList.toggle('live-mode', currentSection === 'live');
@@ -269,7 +351,8 @@ async function loadCategoryItems(catId) {
       const filterId = catId === 'all' ? '' : catId;
 
       if (currentSection === 'live') {
-        items = await XtreamApi.getLiveStreams(filterId);
+        const rawLive = await XtreamApi.getLiveStreams(filterId);
+        items = ChannelGrouper.groupLiveStreams(rawLive || []);
       } else if (currentSection === 'movies') {
         items = await XtreamApi.getVodStreams(filterId);
       } else if (currentSection === 'series') {
@@ -321,14 +404,22 @@ function createLiveCard(item) {
   card.className = 'live-card focusable';
   const logo = item.stream_icon || item.logo || 'assets/placeholder_channel.png';
   const isFav = Favorites.isFav('live', item.stream_id || item.id);
+  const displayName = item.displayName || item.name;
+
+  let badgesHtml = '<div class="channel-badge">AO VIVO</div>';
+  if (item.variants && item.variants.length > 1) {
+    badgesHtml += `<div class="channel-quality-badge" title="${item.variants.length} qualidades disponíveis">${item.variants.length}Q</div>`;
+  }
 
   card.innerHTML = `
     <div class="logo-box">
       <img src="${logo}" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'50\\' height=\\'50\\' viewBox=\\'0 0 24 24\\'><rect width=\\'24\\' height=\\'24\\' fill=\\'%23111\\'/><text x=\\'50%\\' y=\\'50%\\' fill=\\'%23666\\' font-size=\\'8\\' text-anchor=\\'middle\\' dy=\\'.3em\\'>TV</text></svg>'">
     </div>
     <div class="channel-info">
-      <div class="channel-name">${item.name}</div>
-      <div class="channel-badge">AO VIVO</div>
+      <div class="channel-name">${displayName}</div>
+      <div style="display:flex; gap:6px; align-items:center;">
+        ${badgesHtml}
+      </div>
     </div>
     <button class="channel-fav-btn focusable ${isFav ? 'active' : ''}" title="Favoritar">
       ${isFav ? '★' : '☆'}
@@ -341,7 +432,7 @@ function createLiveCard(item) {
     e.stopPropagation();
     const next = Favorites.toggle('live', {
       id: item.stream_id || item.id,
-      name: item.name,
+      name: displayName,
       stream_icon: item.stream_icon || item.logo
     });
     favBtn.textContent = next ? '★' : '☆';
@@ -354,14 +445,13 @@ function createLiveCard(item) {
   };
 
   card.onclick = async () => {
-    if (Parental.isAdultName(item.name)) {
+    if (Parental.isAdultName(displayName)) {
       const ok = await Parental.promptPin();
       if (!ok) {
         return; // cancelado pelo usuário
       }
     }
-    const url = XtreamApi.getLiveUrl(item.stream_id || item.id);
-    playStream(url, item.name, 'live');
+    playLiveWithQualities(item);
   };
 
   return card;
@@ -547,8 +637,100 @@ function closeMediaModal() {
   activeModalMedia = null;
 }
 
+// --- Video Player State & Quality Control ---
+let currentLiveVariants = [];
+let currentLiveVariant = null;
+let currentLiveChannelName = '';
+
+function playLiveWithQualities(channelItem) {
+  const variants = channelItem.variants && channelItem.variants.length > 0
+    ? channelItem.variants
+    : [{
+        quality: ChannelGrouper.extractQuality(channelItem.name).quality || 'HD',
+        stream_id: channelItem.stream_id || channelItem.id,
+        name: channelItem.name,
+        item: channelItem
+      }];
+
+  currentLiveVariants = variants;
+  currentLiveVariant = variants[0];
+  currentLiveChannelName = channelItem.displayName || channelItem.name;
+
+  const initialUrl = XtreamApi.getLiveUrl(currentLiveVariant.stream_id);
+  playStream(initialUrl, `${currentLiveChannelName} (${currentLiveVariant.quality})`, 'live', variants, currentLiveVariant);
+}
+
+function renderQualityPills(variants, activeVariant) {
+  if (!el.qualityPillsRow) return;
+  el.qualityPillsRow.innerHTML = '';
+
+  if (!variants || variants.length === 0) {
+    if (el.playerQualityBar) el.playerQualityBar.style.display = 'none';
+    return;
+  }
+
+  variants.forEach(variant => {
+    const btn = document.createElement('button');
+    btn.className = 'quality-pill focusable';
+    btn.textContent = variant.quality;
+    btn.setAttribute('data-id', variant.stream_id);
+
+    const isActive = activeVariant && (activeVariant.stream_id == variant.stream_id);
+    if (isActive) {
+      btn.classList.add('active');
+    }
+
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      switchLiveQuality(variant);
+    };
+
+    el.qualityPillsRow.appendChild(btn);
+  });
+}
+
+function switchLiveQuality(variant) {
+  if (!variant || (currentLiveVariant && currentLiveVariant.stream_id == variant.stream_id)) {
+    return;
+  }
+
+  currentLiveVariant = variant;
+
+  // Update pills UI
+  if (el.qualityPillsRow) {
+    const pills = el.qualityPillsRow.querySelectorAll('.quality-pill');
+    pills.forEach(p => {
+      if (p.getAttribute('data-id') == variant.stream_id) {
+        p.classList.add('active');
+      } else {
+        p.classList.remove('active');
+      }
+    });
+  }
+
+  // Update player title
+  el.playerTitle.textContent = `${currentLiveChannelName} (${variant.quality})`;
+
+  // Switch stream smoothly
+  const streamUrl = XtreamApi.getLiveUrl(variant.stream_id);
+  const proxiedUrl = XtreamApi.wrapUrl(streamUrl);
+
+  if (hlsInstance) {
+    hlsInstance.loadSource(proxiedUrl);
+    hlsInstance.attachMedia(el.mainVideo);
+    el.mainVideo.play().catch(() => {});
+  } else {
+    el.mainVideo.src = proxiedUrl;
+    el.mainVideo.load();
+    el.mainVideo.play().catch(() => {});
+  }
+
+  showToast(`Qualidade: ${variant.quality}`);
+  resetControlsTimeout();
+}
+
 // --- Video Player ---
-function playStream(url, title, type) {
+function playStream(url, title, type, variants = [], activeVariant = null) {
   if (!url) {
     showToast('Link do vídeo indisponível.');
     return;
@@ -557,6 +739,18 @@ function playStream(url, title, type) {
   el.playerOverlay.style.display = 'flex';
   el.playerTitle.textContent = title || 'Reprodução';
   el.playerOverlay.classList.add('controls-visible');
+
+  // Toggle Live Quality Bar vs VOD Timeline
+  if (type === 'live') {
+    if (el.playerTimelineBox) el.playerTimelineBox.style.display = 'none';
+    if (el.playerQualityBar) {
+      el.playerQualityBar.style.display = 'flex';
+      renderQualityPills(variants, activeVariant);
+    }
+  } else {
+    if (el.playerQualityBar) el.playerQualityBar.style.display = 'none';
+    if (el.playerTimelineBox) el.playerTimelineBox.style.display = 'flex';
+  }
 
   // Clear previous player
   if (hlsInstance) {
@@ -578,7 +772,7 @@ function playStream(url, title, type) {
   const isHls = streamUrl.includes('.m3u8') || type === 'live';
 
   if (isHls && Hls.isSupported()) {
-    // Live TV via Hls.js with CORS proxy (CONFIRMED WORKING!)
+    // Live TV via Hls.js with CORS proxy
     const proxiedUrl = XtreamApi.wrapUrl(streamUrl);
     hlsInstance = new Hls({
       enableWorker: true,
@@ -704,6 +898,41 @@ function setupEvents() {
     btn.onclick = () => switchSection(btn.dataset.section);
   });
 
+  // Aspect Ratio buttons
+  if (el.btnAspectContain) {
+    el.btnAspectContain.onclick = (e) => {
+      e.stopPropagation();
+      el.mainVideo.style.objectFit = 'contain';
+      el.btnAspectContain.classList.add('active');
+      if (el.btnAspectFill) el.btnAspectFill.classList.remove('active');
+      showToast('Proporção: Original');
+      resetControlsTimeout();
+    };
+  }
+
+  if (el.btnAspectFill) {
+    el.btnAspectFill.onclick = (e) => {
+      e.stopPropagation();
+      el.mainVideo.style.objectFit = 'fill';
+      el.btnAspectFill.classList.add('active');
+      if (el.btnAspectContain) el.btnAspectContain.classList.remove('active');
+      showToast('Proporção: Ajustar à Tela');
+      resetControlsTimeout();
+    };
+  }
+
+  // Click on player background toggles controls visibility
+  el.playerOverlay.onclick = (e) => {
+    if (e.target.closest('.player-topbar, .player-controls')) {
+      return;
+    }
+    if (el.playerOverlay.classList.contains('controls-visible')) {
+      el.playerOverlay.classList.remove('controls-visible');
+    } else {
+      resetControlsTimeout();
+    }
+  };
+
   // Search filter
   el.searchInput.oninput = () => {
     const query = el.searchInput.value.toLowerCase().trim();
@@ -712,7 +941,7 @@ function setupEvents() {
       return;
     }
     const filtered = currentItems.filter(item => {
-      const name = (item.name || item.title || '').toLowerCase();
+      const name = (item.displayName || item.name || item.title || '').toLowerCase();
       return name.includes(query);
     });
     renderItems(filtered);
@@ -753,12 +982,39 @@ function setupTvKeys() {
     // When Player is active
     if (el.playerOverlay.style.display === 'flex') {
       resetControlsTimeout();
-      if (keyCode === 32 || keyCode === 13) {
+      const active = document.activeElement;
+      const isPlayerButton = active && el.playerOverlay.contains(active) && active.classList.contains('focusable');
+
+      if (keyCode === 32) { // Space toggles play/pause
+        e.preventDefault();
         el.playerPlayPause.click();
-      } else if (keyCode === 37) { // Left 15s
-        el.mainVideo.currentTime = Math.max(0, el.mainVideo.currentTime - 15);
-      } else if (keyCode === 39) { // Right 15s
-        el.mainVideo.currentTime = Math.min(el.mainVideo.duration, el.mainVideo.currentTime + 15);
+        return;
+      }
+
+      if (keyCode === 13) { // Enter on focused player button clicks it
+        if (isPlayerButton) {
+          active.click();
+        } else {
+          el.playerPlayPause.click();
+        }
+        return;
+      }
+
+      // If user is navigating with arrows inside player controls
+      if ([37, 38, 39, 40].includes(keyCode)) {
+        if (isPlayerButton || el.playerOverlay.classList.contains('controls-visible')) {
+          handleDpad(keyCode);
+          return;
+        }
+        // Fallback: Seek only for VOD when no button is focused
+        if (currentSection !== 'live') {
+          if (keyCode === 37) {
+            el.mainVideo.currentTime = Math.max(0, el.mainVideo.currentTime - 15);
+          } else if (keyCode === 39) {
+            el.mainVideo.currentTime = Math.min(el.mainVideo.duration, el.mainVideo.currentTime + 15);
+          }
+          return;
+        }
       }
       return;
     }
@@ -775,9 +1031,11 @@ function setupTvKeys() {
 }
 
 function handleDpad(keyCode) {
-  // While the PIN modal is open, keep D-pad focus inside it
+  // While the PIN modal is open, keep D-pad focus inside it. When player is open, keep inside player.
   const pinModal = document.getElementById('pin-modal');
-  const scope = (pinModal && pinModal.style.display === 'flex') ? pinModal : document;
+  const scope = (pinModal && pinModal.style.display === 'flex')
+    ? pinModal
+    : (el.playerOverlay && el.playerOverlay.style.display === 'flex' ? el.playerOverlay : document);
   const focusables = Array.from(scope.querySelectorAll('.focusable:not([disabled])')).filter(el => {
     return el.offsetParent !== null;
   });

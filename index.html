@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
@@ -180,7 +180,24 @@
 
     <!-- Controles do Player -->
     <div class="player-controls">
-      <div class="player-timeline-box">
+      <!-- Barra de Qualidade e Aspecto (Canais Ao Vivo) -->
+      <div id="player-quality-bar" class="player-quality-bar" style="display: none;">
+        <div class="quality-bar-left">
+          <span class="quality-bar-tag">QUALIDADE:</span>
+          <div id="quality-pills-row" class="quality-pills-row"></div>
+        </div>
+        <div class="quality-bar-divider"></div>
+        <div class="quality-bar-right">
+          <button id="btn-aspect-contain" class="aspect-pill active focusable" title="Proporção Original">
+            ⛶ Original
+          </button>
+          <button id="btn-aspect-fill" class="aspect-pill focusable" title="Ajustar à Tela">
+            ⛶ Ajustar
+          </button>
+        </div>
+      </div>
+
+      <div id="player-timeline-box" class="player-timeline-box">
         <span id="player-time-current">00:00</span>
         <input type="range" id="player-timeline" class="timeline-slider focusable" min="0" max="100" value="0">
         <span id="player-time-total">00:00</span>
@@ -267,9 +284,9 @@
   <div id="toast" class="toast">Mensagem</div>
 
   <!-- Scripts -->
-  <script src="js/favorites.js?v=4"></script>
-  <script src="js/parental.js?v=7"></script>
-  <script src="js/api.js?v=6"></script>
-  <script src="js/app.js?v=7"></script>
+  <script src="js/favorites.js?v=5"></script>
+  <script src="js/parental.js?v=8"></script>
+  <script src="js/api.js?v=7"></script>
+  <script src="js/app.js?v=8"></script>
 </body>
 </html>
