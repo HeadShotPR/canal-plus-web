@@ -39,6 +39,7 @@ const el = {
   playerOverlay: document.getElementById('player-overlay'),
   mainVideo: document.getElementById('main-video'),
   playerTitle: document.getElementById('player-title'),
+  playerFavBtn: document.getElementById('player-fav-btn'),
   playerPlayPause: document.getElementById('player-play-pause'),
   playerBackBtn: document.getElementById('player-back-btn'),
   playerTimelineBox: document.getElementById('player-timeline-box'),
@@ -261,6 +262,8 @@ function selectCategory(catId, element) {
 // --- Channel Grouper (Quality grouping for Live TV) ---
 const ChannelGrouper = {
   QUALITY_REGEX: /[\s\(\[]+(4K|UHD|FHD[²2]?|HD[²2]?|SD[²2]?|HEVC|H\.265)[\)\]]?\s*$/i,
+  variantsByStreamId: new Map(),
+  variantsByName: new Map(),
 
   normalizeQuality(q) {
     if (!q) return 'HD';
@@ -298,6 +301,37 @@ const ChannelGrouper = {
     return { cleanName: name.trim(), quality: 'HD' };
   },
 
+  cleanChannelKey(name) {
+    const { cleanName } = this.extractQuality(name);
+    return cleanName.toLowerCase().replace(/[^a-z0-9]/g, '');
+  },
+
+  registerVariants(streamId, name, variants) {
+    if (!Array.isArray(variants) || variants.length === 0) return;
+    if (streamId) {
+      this.variantsByStreamId.set(String(streamId), variants);
+    }
+    variants.forEach(v => {
+      const vId = v.stream_id || (v.item && (v.item.stream_id || v.item.id));
+      if (vId) this.variantsByStreamId.set(String(vId), variants);
+    });
+    const key = this.cleanChannelKey(name);
+    if (key) {
+      this.variantsByName.set(key, variants);
+    }
+  },
+
+  getVariants(streamId, name) {
+    if (streamId && this.variantsByStreamId.has(String(streamId))) {
+      return this.variantsByStreamId.get(String(streamId));
+    }
+    const key = this.cleanChannelKey(name);
+    if (key && this.variantsByName.has(key)) {
+      return this.variantsByName.get(key);
+    }
+    return null;
+  },
+
   groupLiveStreams(streams) {
     if (!Array.isArray(streams) || streams.length === 0) return [];
     const groups = new Map();
@@ -324,6 +358,9 @@ const ChannelGrouper = {
       group.variants.sort((a, b) => a.rank - b.rank);
       const primary = group.variants[0];
 
+      // Store in global memory cache so favorites and other views retain variants
+      this.registerVariants(primary.stream_id, group.cleanName, group.variants);
+
       grouped.push({
         ...primary.item,
         displayName: group.cleanName || primary.item.name,
@@ -346,6 +383,14 @@ async function loadCategoryItems(catId) {
       // Load favorites of the active section
       items = Favorites.getList(getFavSectionKey());
       el.contentTitle.textContent = '★ Favoritos';
+      if (currentSection === 'live') {
+        // Register any saved variants into ChannelGrouper cache!
+        items.forEach(it => {
+          if (it.variants && it.variants.length > 0) {
+            ChannelGrouper.registerVariants(it.stream_id || it.id, it.displayName || it.name, it.variants);
+          }
+        });
+      }
     } else {
       el.contentTitle.textContent = getSectionTitle(currentSection);
       const filterId = catId === 'all' ? '' : catId;
@@ -403,8 +448,8 @@ function createLiveCard(item) {
   const card = document.createElement('div');
   card.className = 'live-card focusable';
   const logo = item.stream_icon || item.logo || 'assets/placeholder_channel.png';
-  const isFav = Favorites.isFav('live', item.stream_id || item.id);
-  const displayName = item.displayName || item.name;
+  const displayName = item.displayName || item.cleanName || item.name;
+  const isFav = Favorites.isFav('live', item.stream_id || item.id, displayName);
 
   let badgesHtml = '<div class="channel-badge">AO VIVO</div>';
   if (item.variants && item.variants.length > 1) {
@@ -431,9 +476,12 @@ function createLiveCard(item) {
   favBtn.onclick = (e) => {
     e.stopPropagation();
     const next = Favorites.toggle('live', {
+      ...item,
       id: item.stream_id || item.id,
       name: displayName,
-      stream_icon: item.stream_icon || item.logo
+      displayName: displayName,
+      stream_icon: item.stream_icon || item.logo,
+      variants: item.variants || ChannelGrouper.getVariants(item.stream_id || item.id, displayName)
     });
     favBtn.textContent = next ? '★' : '☆';
     favBtn.classList.toggle('active', next);
@@ -642,19 +690,49 @@ let currentLiveVariants = [];
 let currentLiveVariant = null;
 let currentLiveChannelName = '';
 
+function updatePlayerFavBtn() {
+  if (!el.playerFavBtn) return;
+  const isFav = Favorites.isFav('live', currentLiveVariant ? currentLiveVariant.stream_id : null, currentLiveChannelName);
+  el.playerFavBtn.textContent = isFav ? '★ Favorito' : '☆ Favorito';
+  el.playerFavBtn.style.color = isFav ? '#ffd700' : '#ffffff';
+}
+
+if (el.playerFavBtn) {
+  el.playerFavBtn.onclick = (e) => {
+    e.stopPropagation();
+    const next = Favorites.toggle('live', {
+      stream_id: currentLiveVariant ? currentLiveVariant.stream_id : null,
+      id: currentLiveVariant ? currentLiveVariant.stream_id : null,
+      displayName: currentLiveChannelName,
+      name: currentLiveChannelName,
+      variants: currentLiveVariants
+    });
+    updatePlayerFavBtn();
+    showToast(next ? 'Canal adicionado aos Favoritos!' : 'Canal removido dos Favoritos!');
+    updateFavoritesCatCount();
+    if (currentCategory === '__favorites__') {
+      loadCategoryItems('__favorites__');
+    }
+  };
+}
+
 function playLiveWithQualities(channelItem) {
-  const variants = channelItem.variants && channelItem.variants.length > 0
+  let variants = channelItem.variants && channelItem.variants.length > 0
     ? channelItem.variants
-    : [{
-        quality: ChannelGrouper.extractQuality(channelItem.name).quality || 'HD',
-        stream_id: channelItem.stream_id || channelItem.id,
-        name: channelItem.name,
-        item: channelItem
-      }];
+    : ChannelGrouper.getVariants(channelItem.stream_id || channelItem.id, channelItem.displayName || channelItem.name);
+
+  if (!variants || variants.length === 0) {
+    variants = [{
+      quality: ChannelGrouper.extractQuality(channelItem.name).quality || 'HD',
+      stream_id: channelItem.stream_id || channelItem.id,
+      name: channelItem.name,
+      item: channelItem
+    }];
+  }
 
   currentLiveVariants = variants;
   currentLiveVariant = variants[0];
-  currentLiveChannelName = channelItem.displayName || channelItem.name;
+  currentLiveChannelName = channelItem.displayName || channelItem.cleanName || channelItem.name;
 
   const initialUrl = XtreamApi.getLiveUrl(currentLiveVariant.stream_id);
   playStream(initialUrl, `${currentLiveChannelName} (${currentLiveVariant.quality})`, 'live', variants, currentLiveVariant);
@@ -708,8 +786,9 @@ function switchLiveQuality(variant) {
     });
   }
 
-  // Update player title
+  // Update player title and favorite button
   el.playerTitle.textContent = `${currentLiveChannelName} (${variant.quality})`;
+  updatePlayerFavBtn();
 
   // Switch stream smoothly
   const streamUrl = XtreamApi.getLiveUrl(variant.stream_id);
@@ -747,9 +826,14 @@ function playStream(url, title, type, variants = [], activeVariant = null) {
       el.playerQualityBar.style.display = 'flex';
       renderQualityPills(variants, activeVariant);
     }
+    if (el.playerFavBtn) {
+      el.playerFavBtn.style.display = 'inline-block';
+      updatePlayerFavBtn();
+    }
   } else {
     if (el.playerQualityBar) el.playerQualityBar.style.display = 'none';
     if (el.playerTimelineBox) el.playerTimelineBox.style.display = 'flex';
+    if (el.playerFavBtn) el.playerFavBtn.style.display = 'none';
   }
 
   // Clear previous player
