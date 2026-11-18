@@ -10,7 +10,7 @@
     }
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Canal+ | Web & Smart TV Player</title>
+  <title>CanalMais | Web & Smart TV Player</title>
   <link rel="stylesheet" href="css/style.css?v=4">
   <!-- HLS.js for Live & VOD Video Playback -->
   <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
@@ -24,7 +24,7 @@
     <div class="login-card">
       <div class="brand-badge">
         <span class="logo-icon">📺</span>
-        <h1>CANAL<span>+</span></h1>
+        <h1>CANAL<span>MAIS</span></h1>
       </div>
 
       <div class="form-group">
@@ -38,7 +38,7 @@
       </div>
 
       <button id="btn-login" class="btn-primary focusable">
-        <span>ENTRAR NO CANAL+</span> ▶
+        <span>ENTRAR NO CANALMAIS</span> ▶
       </button>
 
       <div id="login-msg" class="login-msg"></div>
@@ -61,7 +61,7 @@
     <!-- Barra Superior -->
     <header class="top-navbar">
       <div class="nav-left">
-        <div class="app-logo">CANAL<span>+</span></div>
+        <div class="app-logo">CANAL<span>MAIS</span></div>
         <nav class="nav-tabs">
           <button class="nav-tab-btn focusable active" data-section="live">
             <span>📺</span> Ao Vivo
@@ -71,6 +71,9 @@
           </button>
           <button class="nav-tab-btn focusable" data-section="series">
             <span>🍿</span> Séries
+          </button>
+          <button class="nav-tab-btn focusable" data-section="offline">
+            <span>⬇</span> Offline
           </button>
           <button class="nav-tab-btn tab-games focusable" data-section="games">
             <span>🎮</span> Jogos Retrô
@@ -150,6 +153,9 @@
           <button id="btn-watch" class="btn-watch focusable">
             <span>▶</span> Assistir
           </button>
+          <button id="btn-download" class="btn-download focusable">
+            <span>⬇</span> Baixar Filme
+          </button>
           <button id="btn-fav" class="btn-fav focusable">
             Adicionar aos Favoritos
           </button>
@@ -174,6 +180,12 @@
     <div class="player-topbar">
       <div id="player-title" class="player-title">Reproduzindo</div>
       <div style="display: flex; gap: 10px; align-items: center;">
+        <button id="player-series-eps-btn" class="btn-icon focusable" style="background: rgba(30,41,59,0.9); border: 1px solid rgba(56,189,248,0.5); display: none; font-size: 13px; font-weight: 700; padding: 8px 14px; border-radius: 8px; color: #fff;">
+          📑 Episódios
+        </button>
+        <button id="player-series-next-btn" class="btn-icon focusable" style="background: #0ea5e9; display: none; font-size: 13px; font-weight: 700; padding: 8px 14px; border-radius: 8px; color: #fff;">
+          Próximo ▶
+        </button>
         <button id="player-fav-btn" class="btn-icon focusable" style="background: rgba(0,0,0,0.6); display: none; font-size: 13px; font-weight: 700; padding: 8px 16px; border-radius: 8px;">
           ☆ Favorito
         </button>
@@ -193,6 +205,9 @@
         </div>
         <div class="quality-bar-divider"></div>
         <div class="quality-bar-right">
+          <button id="btn-player-reconnect" class="aspect-pill focusable" style="color: #38bdf8; border-color: rgba(56, 189, 248, 0.45);" title="Reconectar Transmissão">
+            🔄 Reconectar
+          </button>
           <button id="btn-aspect-contain" class="aspect-pill active focusable" title="Proporção Original">
             ⛶ Original
           </button>
@@ -212,6 +227,17 @@
         <button id="player-play-pause" class="player-btn play-btn focusable">
           ⏸
         </button>
+      </div>
+    </div>
+
+    <!-- In-Player Quick Episodes Modal -->
+    <div id="inplayer-episodes-modal" style="display:none; position:absolute; inset:0; background:rgba(0,0,0,0.85); z-index:2100; align-items:center; justify-content:center; backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px);">
+      <div style="background:rgba(15,23,42,0.96); border:1px solid rgba(56,189,248,0.35); border-radius:18px; width:90%; max-width:540px; max-height:80vh; display:flex; flex-direction:column; padding:20px; box-shadow:0 20px 50px rgba(0,0,0,0.9);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; border-bottom:1px solid rgba(255,255,255,0.12); padding-bottom:12px;">
+          <div id="inplayer-episodes-title" style="font-weight:800; font-size:16px; color:#fff;">📑 Escolha o Episódio</div>
+          <button id="btn-close-inplayer-eps" class="btn-icon focusable" style="background:rgba(255,255,255,0.1); padding:6px 12px; border-radius:8px; font-weight:700;">✕ Fechar</button>
+        </div>
+        <div id="inplayer-episodes-list" style="overflow-y:auto; flex:1; display:flex; flex-direction:column; gap:8px; padding-right:4px;"></div>
       </div>
     </div>
   </div>
@@ -288,10 +314,13 @@
   =========================================== -->
   <div id="toast" class="toast">Mensagem</div>
 
+  <!-- Local Video File Input (for Offline Mode) -->
+  <input type="file" id="local-video-input" accept="video/*,.mp4,.mkv,.avi,.mov,.webm,.ts,.m3u8,.wmv,.flv" style="position:fixed; top:-9999px; left:-9999px; width:1px; height:1px; opacity:0; pointer-events:none;">
+
   <!-- Scripts -->
-  <script src="js/favorites.js?v=7"></script>
-  <script src="js/parental.js?v=8"></script>
-  <script src="js/api.js?v=7"></script>
-  <script src="js/app.js?v=9"></script>
+  <script src="js/favorites.js?v=12"></script>
+  <script src="js/parental.js?v=12"></script>
+  <script src="js/api.js?v=12"></script>
+  <script src="js/app.js?v=12"></script>
 </body>
 </html>

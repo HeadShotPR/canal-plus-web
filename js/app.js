@@ -6,6 +6,44 @@ let hlsInstance = null;
 let activeModalMedia = null;
 let adultCategoryIds = new Set();
 
+// Estado e Memória de Séries (Paridade com o APK)
+const SeriesStore = {
+  KEY: 'canalmais_series_v1',
+  getAll() {
+    try {
+      const s = localStorage.getItem(this.KEY);
+      return s ? JSON.parse(s) : {};
+    } catch (e) {
+      return {};
+    }
+  },
+  getLast(seriesId) {
+    if (!seriesId) return null;
+    const all = this.getAll();
+    return all[seriesId] || null;
+  },
+  save(seriesId, epId, epIndex, epTitle) {
+    if (!seriesId) return;
+    try {
+      const all = this.getAll();
+      all[seriesId] = {
+        epId: String(epId),
+        epIndex: Number(epIndex),
+        epTitle: epTitle || '',
+        updatedAt: Date.now()
+      };
+      localStorage.setItem(this.KEY, JSON.stringify(all));
+    } catch (e) {}
+  }
+};
+
+let currentSeriesEpisodes = [];
+let currentSeriesIndex = -1;
+let currentSeriesId = null;
+let currentSeriesName = '';
+let currentSeriesCover = '';
+let seriesAutoPlayTimer = null;
+
 // DOM Elements
 const el = {
   loginScreen: document.getElementById('login-screen'),
@@ -31,15 +69,23 @@ const el = {
   modalGenre: document.getElementById('modal-genre'),
   modalPlot: document.getElementById('modal-plot'),
   btnWatch: document.getElementById('btn-watch'),
+  btnDownload: document.getElementById('btn-download'),
   btnFav: document.getElementById('btn-fav'),
   btnTrailer: document.getElementById('btn-trailer'),
   episodesContainer: document.getElementById('episodes-container'),
   seasonsBar: document.getElementById('seasons-bar'),
   episodesList: document.getElementById('episodes-list'),
+  localVideoInput: document.getElementById('local-video-input'),
   playerOverlay: document.getElementById('player-overlay'),
   mainVideo: document.getElementById('main-video'),
   playerTitle: document.getElementById('player-title'),
   playerFavBtn: document.getElementById('player-fav-btn'),
+  playerSeriesNextBtn: document.getElementById('player-series-next-btn'),
+  playerSeriesEpsBtn: document.getElementById('player-series-eps-btn'),
+  inplayerEpisodesModal: document.getElementById('inplayer-episodes-modal'),
+  inplayerEpisodesList: document.getElementById('inplayer-episodes-list'),
+  inplayerEpisodesTitle: document.getElementById('inplayer-episodes-title'),
+  btnCloseInplayerEps: document.getElementById('btn-close-inplayer-eps'),
   playerPlayPause: document.getElementById('player-play-pause'),
   playerBackBtn: document.getElementById('player-back-btn'),
   playerTimelineBox: document.getElementById('player-timeline-box'),
@@ -48,6 +94,7 @@ const el = {
   playerTimeTotal: document.getElementById('player-time-total'),
   playerQualityBar: document.getElementById('player-quality-bar'),
   qualityPillsRow: document.getElementById('quality-pills-row'),
+  btnPlayerReconnect: document.getElementById('btn-player-reconnect'),
   btnAspectContain: document.getElementById('btn-aspect-contain'),
   btnAspectFill: document.getElementById('btn-aspect-fill'),
   arcadeContainer: document.getElementById('arcade-container'),
@@ -167,6 +214,16 @@ function getFavSectionKey() {
 
 // --- Load Categories and Content ---
 async function loadSectionData(section) {
+  if (section === 'offline') {
+    el.categoriesList.innerHTML = `
+      <div class="cat-item focusable active">
+        <span>⬇</span> Filmes Baixados
+      </div>
+    `;
+    loadOfflineItems();
+    return;
+  }
+
   el.categoriesList.innerHTML = '<div class="spinner"></div>';
   el.itemsGrid.innerHTML = '<div class="spinner"></div>';
   el.contentTitle.textContent = getSectionTitle(section);
@@ -196,6 +253,7 @@ function getSectionTitle(section) {
     case 'live': return '📺 Canais Ao Vivo';
     case 'movies': return '🎬 Filmes';
     case 'series': return '🍿 Séries';
+    case 'offline': return '⬇ Filmes & Vídeos Offline';
     default: return '';
   }
 }
@@ -221,6 +279,17 @@ function renderCategories(cats) {
   favItem.innerHTML = `<span>★ Favoritos</span><span id="fav-count-badge" class="cat-pill">${favCount}</span>`;
   favItem.onclick = () => selectCategory('__favorites__', favItem);
   el.categoriesList.appendChild(favItem);
+
+  // 1.5 "▶ Continuar Assistindo" (Filmes e Séries, igual no APK)
+  if (currentSection === 'movies' || currentSection === 'series') {
+    const resumeCount = ResumeStore.count(currentSection);
+    const resumeItem = document.createElement('div');
+    resumeItem.className = 'cat-item focusable resume-cat-item';
+    resumeItem.dataset.id = '__resume__';
+    resumeItem.innerHTML = `<span>▶ Continuar Assistindo</span><span id="resume-count-badge" class="cat-pill">${resumeCount}</span>`;
+    resumeItem.onclick = () => selectCategory('__resume__', resumeItem);
+    el.categoriesList.appendChild(resumeItem);
+  }
 
   // 2. "🌟 Todos"
   const allItem = document.createElement('div');
@@ -379,7 +448,13 @@ async function loadCategoryItems(catId) {
   try {
     let items = [];
 
-    if (catId === '__favorites__') {
+    if (catId === '__resume__') {
+      items = ResumeStore.list(currentSection);
+      el.contentTitle.textContent = '▶ Continuar Assistindo';
+      currentItems = items || [];
+      renderResumeItems(currentItems);
+      return;
+    } else if (catId === '__favorites__') {
       // Load favorites of the active section
       items = Favorites.getList(getFavSectionKey());
       el.contentTitle.textContent = '★ Favoritos';
@@ -526,6 +601,401 @@ function createMediaCard(item) {
   return card;
 }
 
+// --- Resume Watching Store (Ported from Android ResumeStore) ---
+const ResumeStore = {
+  KEY: 'canalmais_resume_v1',
+  getAll() {
+    try {
+      const raw = localStorage.getItem(this.KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+      return {};
+    }
+  },
+  saveAll(data) {
+    try {
+      localStorage.setItem(this.KEY, JSON.stringify(data));
+    } catch (e) {}
+  },
+  count(section) {
+    return this.list(section).length;
+  },
+  get(id) {
+    if (!id) return null;
+    const all = this.getAll();
+    return all[String(id)] || null;
+  },
+  save(id, name, poster, pos, dur, section, streamUrl, extra = {}) {
+    if (!id || !dur || dur <= 0 || pos < 5) return;
+    if (Parental.isAdultName(name) || (section && Parental.isAdultName(section))) {
+      this.remove(id);
+      return;
+    }
+
+    const pct = Math.floor((pos * 100) / dur);
+    // Se completou 95% ou faltam menos de 30s, concluiu o filme -> remove do continuar assistindo
+    if (pct >= 95 || (dur - pos) < 30) {
+      this.remove(id);
+      return;
+    }
+
+    const all = this.getAll();
+    all[String(id)] = {
+      id: String(id),
+      name: name || 'Filme',
+      poster: poster || '',
+      pos: Math.floor(pos),
+      dur: Math.floor(dur),
+      pct: pct,
+      section: section || 'movies',
+      streamUrl: streamUrl || '',
+      updatedAt: Date.now(),
+      extra: extra
+    };
+    this.saveAll(all);
+    updateResumeCatCount();
+  },
+  remove(id) {
+    if (!id) return;
+    const all = this.getAll();
+    if (all[String(id)]) {
+      delete all[String(id)];
+      this.saveAll(all);
+      updateResumeCatCount();
+    }
+  },
+  list(filterSection) {
+    const all = this.getAll();
+    const arr = Object.values(all);
+    arr.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
+    if (!filterSection || filterSection === 'all') {
+      return arr;
+    }
+
+    return arr.filter(item => {
+      if (filterSection === 'movies' && (item.section === 'movies' || item.section === 'vod' || item.section === 'movie')) return true;
+      if (filterSection === 'series' && item.section === 'series') return true;
+      return item.section === filterSection;
+    });
+  }
+};
+
+function updateResumeCatCount() {
+  const badge = document.getElementById('resume-count-badge');
+  if (badge) {
+    badge.textContent = ResumeStore.count(currentSection);
+  }
+}
+
+function renderResumeItems(items) {
+  el.itemsGrid.innerHTML = '';
+  el.itemsGrid.classList.remove('live-mode');
+  el.contentCount.textContent = `${items.length} itens`;
+
+  if (!items || items.length === 0) {
+    el.itemsGrid.innerHTML = `
+      <div style="grid-column: 1 / -1; text-align: center; padding: 50px 20px; color: #94a3b8;">
+        <div style="font-size: 48px; margin-bottom: 12px;">▶</div>
+        <h3 style="color: #fff; margin-bottom: 8px;">Nenhum conteúdo em andamento</h3>
+        <p style="font-size: 14px; max-width: 500px; margin: 0 auto;">
+          Quando você começar a assistir a um filme ou série e pausar, ele aparecerá aqui com o minuto exato para você continuar de onde parou!
+        </p>
+      </div>
+    `;
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  items.forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'media-card focusable';
+    const poster = item.poster || 'assets/placeholder_channel.png';
+    const title = item.name || '';
+    const posStr = formatTime(item.pos);
+    const durStr = formatTime(item.dur);
+    const pct = item.pct || 0;
+
+    card.innerHTML = `
+      <div class="poster-box">
+        <img src="${poster}" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'160\\' height=\\'240\\'><rect width=\\'160\\' height=\\'240\\' fill=\\'%230d1322\\'/><text x=\\'50%\\' y=\\'50%\\' fill=\\'%23445\\' font-size=\\'14\\' text-anchor=\\'middle\\' dy=\\'.3em\\'>Sem Capa</text></svg>'">
+        <div class="resume-badge">⏱ ${posStr} / ${durStr} (${pct}%)</div>
+        <div class="resume-progress-container">
+          <div class="resume-progress-bar" style="width: ${pct}%;"></div>
+        </div>
+      </div>
+      <div class="title-box">
+        <div class="media-title">${title}</div>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+          <span style="font-size:11.5px; color:#38bdf8; font-weight:700;">▶ Continuar</span>
+          <button class="btn-delete-resume focusable" title="Remover do histórico" style="background:rgba(255,255,255,0.1); color:#94a3b8; border:none; padding:3px 7px; border-radius:6px; cursor:pointer; font-size:11px;">✕</button>
+        </div>
+      </div>
+    `;
+
+    card.onclick = () => {
+      const url = item.streamUrl || (item.section === 'series' ? XtreamApi.getEpisodeUrl(item.id) : XtreamApi.getVodUrl(item.id));
+      playStream(url, title, item.section, [], null, item.id, poster, item.pos);
+    };
+
+    const btnDel = card.querySelector('.btn-delete-resume');
+    btnDel.onclick = (e) => {
+      e.stopPropagation();
+      ResumeStore.remove(item.id);
+      showToast('Item removido do Continuar Assistindo.');
+      loadCategoryItems('__resume__');
+    };
+
+    fragment.appendChild(card);
+  });
+
+  el.itemsGrid.appendChild(fragment);
+}
+
+// --- Downloads & Offline Storage System (Ported from Android DownloadStore) ---
+const DownloadsStore = {
+  KEY: 'canalmais_downloads_v1',
+  getAll() {
+    try {
+      const raw = localStorage.getItem(this.KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  },
+  saveAll(list) {
+    try {
+      localStorage.setItem(this.KEY, JSON.stringify(list));
+    } catch (e) {}
+  },
+  add(item) {
+    if (!item || !item.id) return;
+    const list = this.getAll().filter(i => String(i.id) !== String(item.id));
+    list.unshift({
+      id: item.id,
+      name: item.name || item.title || 'Filme',
+      poster: item.poster || item.stream_icon || item.cover || item.logo || '',
+      rating: item.rating || '',
+      year: item.year || '',
+      url: item.url || '',
+      fileName: item.fileName || '',
+      downloadedAt: Date.now()
+    });
+    this.saveAll(list);
+  },
+  remove(id) {
+    const list = this.getAll().filter(i => String(i.id) !== String(id));
+    this.saveAll(list);
+  },
+  isDownloaded(id) {
+    return this.getAll().some(i => String(i.id) === String(id));
+  }
+};
+
+function handleDownloadMovie(item) {
+  if (!item) return;
+  const id = item.stream_id || item.id;
+  const ext = (activeModalMedia && activeModalMedia.container_extension) || item.container_extension || 'mp4';
+  const playExt = (ext && ext.toLowerCase() !== 'mkv') ? ext.toLowerCase() : 'mp4';
+  const url = XtreamApi.getVodUrl(id, playExt);
+  const cleanTitle = (item.name || item.title || 'filme').replace(/[/\\?%*:|"<>]/g, '_');
+  const fileName = `${cleanTitle}.${playExt}`;
+
+  // Salva os dados na aba Offline
+  DownloadsStore.add({
+    id: id,
+    name: item.name || item.title || 'Filme',
+    poster: item.stream_icon || item.cover || item.logo || '',
+    rating: item.rating || '',
+    year: item.year || '',
+    url: url,
+    fileName: fileName
+  });
+
+  // Dispara o download nativo do arquivo no navegador
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.target = '_blank';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  showToast(`⬇ Download iniciado! Salvo na sua aba Offline.`);
+}
+
+function createOfflineCard(item) {
+  const card = document.createElement('div');
+  card.className = 'media-card focusable';
+  const poster = item.poster || '';
+  const title = item.name || 'Filme Offline';
+  const rating = item.rating ? Number(item.rating).toFixed(1) : '';
+
+  card.innerHTML = `
+    <div class="poster-box">
+      <img src="${poster}" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'160\\' height=\\'240\\'><rect width=\\'160\\' height=\\'240\\' fill=\\'%230d1322\\'/><text x=\\'50%\\' y=\\'50%\\' fill=\\'%23445\\' font-size=\\'14\\' text-anchor=\\'middle\\' dy=\\'.3em\\'>Offline</text></svg>'">
+      <div class="channel-quality-badge" style="background:#10b981; color:#fff; position:absolute; top:8px; left:8px; font-weight:800;">OFFLINE</div>
+      ${rating ? `<div class="rating-badge">★ ${rating}</div>` : ''}
+    </div>
+    <div class="title-box">
+      <div class="media-title">${title}</div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px; gap:8px;">
+        <button class="btn-watch-offline focusable" style="flex:1; background:#0ea5e9; color:#fff; border:none; padding:6px 12px; border-radius:12px; font-size:12px; font-weight:700; cursor:pointer;">
+          ▶ Assistir
+        </button>
+        <button class="btn-delete-offline focusable" title="Remover" style="background:rgba(239,68,68,0.2); color:#ef4444; border:1px solid rgba(239,68,68,0.4); padding:5px 9px; border-radius:10px; font-size:12px; cursor:pointer;">
+          🗑️
+        </button>
+      </div>
+    </div>
+  `;
+
+  // Assistir
+  const btnWatch = card.querySelector('.btn-watch-offline');
+  btnWatch.onclick = (e) => {
+    e.stopPropagation();
+    playStream(item.url, title, 'movie', [], null, item.id, item.poster);
+  };
+
+  card.onclick = () => {
+    playStream(item.url, title, 'movie', [], null, item.id, item.poster);
+  };
+
+  // Excluir
+  const btnDelete = card.querySelector('.btn-delete-offline');
+  btnDelete.onclick = (e) => {
+    e.stopPropagation();
+    if (confirm(`Remover "${title}" dos seus downloads offline?`)) {
+      DownloadsStore.remove(item.id);
+      showToast('Filme removido da lista offline.');
+      loadOfflineItems();
+    }
+  };
+
+  return card;
+}
+
+function handleSelectedLocalFile(file) {
+  if (!file) return;
+  const blobUrl = URL.createObjectURL(file);
+  const cleanTitle = file.name.replace(/\.[^/.]+$/, '');
+  const localId = 'local_' + encodeURIComponent(file.name);
+
+  DownloadsStore.add({
+    id: localId,
+    name: `📂 ${cleanTitle}`,
+    poster: '',
+    rating: 'Local',
+    year: new Date().getFullYear(),
+    url: blobUrl,
+    fileName: file.name
+  });
+
+  showToast(`Abrindo: ${cleanTitle}...`, 2500);
+  playStream(blobUrl, `📂 ${cleanTitle}`, 'movie', [], null, localId, '', 0);
+
+  if (currentSection === 'offline') {
+    loadOfflineItems();
+  }
+}
+
+async function openLocalVideoPicker() {
+  // 1. Tentar Modern File System Access API (Nativo do Windows no Opera GX, Chrome, Edge)
+  if (window.showOpenFilePicker) {
+    try {
+      const handles = await window.showOpenFilePicker({
+        multiple: false,
+        types: [{
+          description: 'Vídeos e Filmes',
+          accept: {
+            'video/*': ['.mp4', '.mkv', '.avi', '.mov', '.webm', '.ts', '.m3u8', '.wmv', '.flv']
+          }
+        }]
+      });
+      if (handles && handles.length > 0) {
+        const file = await handles[0].getFile();
+        handleSelectedLocalFile(file);
+        return;
+      }
+    } catch (err) {
+      if (err.name === 'AbortError') return; // Cancelado pelo usuário
+      console.warn('showOpenFilePicker:', err);
+    }
+  }
+
+  // 2. Fallback com input file no DOM
+  let input = document.getElementById('local-video-input');
+  if (!input) {
+    input = document.createElement('input');
+    input.type = 'file';
+    input.id = 'local-video-input';
+    input.accept = 'video/*,.mp4,.mkv,.avi,.mov,.webm,.ts,.m3u8,.wmv,.flv';
+    input.style.cssText = 'position:fixed; top:-9999px; left:-9999px; width:1px; height:1px; opacity:0; pointer-events:none;';
+    document.body.appendChild(input);
+  }
+  el.localVideoInput = input;
+
+  input.value = '';
+  input.onchange = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (file) {
+      handleSelectedLocalFile(file);
+    }
+  };
+
+  input.click();
+}
+
+function loadOfflineItems() {
+  el.itemsGrid.innerHTML = '';
+  el.itemsGrid.classList.remove('live-mode');
+  const items = DownloadsStore.getAll();
+  el.contentTitle.textContent = '⬇ Filmes Baixados (Offline)';
+  el.contentCount.textContent = `${items.length} itens`;
+
+  // Banner superior com botão para abrir arquivo do computador / pendrive
+  const topBar = document.createElement('div');
+  topBar.style.cssText = 'grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; background: rgba(15,23,42,0.8); border: 1px solid rgba(255,255,255,0.12); border-radius: 14px; padding: 14px 20px; margin-bottom: 12px;';
+  topBar.innerHTML = `
+    <div>
+      <div style="font-weight: 800; font-size: 15px; color: #fff;">📁 Reprodução 100% Offline (Sem Internet)</div>
+      <div style="font-size: 12px; color: #94a3b8; margin-top: 2px;">Assista aos filmes baixados direto no app ou abra arquivos do seu computador/pendrive.</div>
+    </div>
+    <button id="btn-browse-local" class="focusable" style="background:#0ea5e9; color:#fff; border:none; padding:8px 16px; border-radius:18px; font-weight:700; cursor:pointer; font-size:13px;">
+      📂 Abrir Arquivo do Disco
+    </button>
+  `;
+  el.itemsGrid.appendChild(topBar);
+
+  const btnBrowse = topBar.querySelector('#btn-browse-local');
+  if (btnBrowse) {
+    btnBrowse.onclick = (e) => {
+      e.stopPropagation();
+      openLocalVideoPicker();
+    };
+  }
+
+  if (items.length === 0) {
+    const emptyBox = document.createElement('div');
+    emptyBox.style.cssText = 'grid-column: 1 / -1; text-align: center; padding: 50px 20px; color: #94a3b8;';
+    emptyBox.innerHTML = `
+      <div style="font-size: 48px; margin-bottom: 12px;">⬇</div>
+      <h3 style="color: #fff; margin-bottom: 8px;">Nenhum filme baixado ainda</h3>
+      <p style="font-size: 14px; max-width: 520px; margin: 0 auto;">
+        Vá até a aba <b>🎬 Filmes</b>, abra qualquer filme e clique em <b>"⬇ Baixar Filme"</b>. O arquivo será baixado e listado aqui para você assistir offline!
+      </p>
+    `;
+    el.itemsGrid.appendChild(emptyBox);
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  items.forEach(item => {
+    fragment.appendChild(createOfflineCard(item));
+  });
+  el.itemsGrid.appendChild(fragment);
+}
+
 // --- Media Modal (Movies & Series) ---
 async function openMediaModal(item, section) {
   if (Parental.isAdultName(item.name || item.title)) {
@@ -551,20 +1021,28 @@ async function openMediaModal(item, section) {
   const isFav = Favorites.isFav(sec, item.stream_id || item.series_id || item.id);
   updateFavButton(isFav);
 
-  // Set Watch Button
+  // Set Watch and Download Buttons
   if (section === 'movies') {
     el.btnWatch.style.display = 'flex';
+    if (el.btnDownload) {
+      el.btnDownload.style.display = 'flex';
+      el.btnDownload.onclick = () => {
+        handleDownloadMovie(item);
+      };
+    }
     el.btnWatch.onclick = () => {
       closeMediaModal();
       const ext = (activeModalMedia && activeModalMedia.container_extension) || item.container_extension || 'mp4';
       const id = item.stream_id || item.id;
       const playExt = (ext && ext.toLowerCase() !== 'mkv') ? ext.toLowerCase() : 'mp4';
       const url = XtreamApi.getVodUrl(id, playExt);
-      playStream(url, item.name || item.title, 'movie');
+      const poster = item.stream_icon || item.cover || item.logo || '';
+      playStream(url, item.name || item.title, 'movie', [], null, id, poster);
     };
     loadMovieDetails(item.stream_id || item.id);
   } else if (section === 'series') {
     el.btnWatch.style.display = 'none';
+    if (el.btnDownload) el.btnDownload.style.display = 'none';
     loadSeriesDetails(item.series_id || item.id);
   }
 }
@@ -655,28 +1133,155 @@ function showSeasonEpisodes(episodes) {
   el.episodesList.innerHTML = '';
   if (!episodes) return;
 
-  episodes.forEach(ep => {
+  const seriesId = activeModalMedia ? (activeModalMedia.series_id || activeModalMedia.id || activeModalMedia.stream_id) : currentSeriesId;
+  const seriesName = activeModalMedia ? (activeModalMedia.name || activeModalMedia.title || '') : currentSeriesName;
+  const seriesCover = activeModalMedia ? (activeModalMedia.stream_icon || activeModalMedia.cover || activeModalMedia.logo || '') : currentSeriesCover;
+  const saved = SeriesStore.getLast(seriesId);
+
+  episodes.forEach((ep, idx) => {
     const item = document.createElement('div');
     item.className = 'episode-item focusable';
+    const epId = ep.id || ep.stream_id;
+
+    const isCurrent = (currentSeriesId == seriesId) && (currentSeriesIndex === idx || String(currentStreamId) === String(epId));
+    const isSaved = saved && String(saved.epId) === String(epId);
+
+    let badgeHtml = '';
+    if (isCurrent) {
+      badgeHtml = `<span style="color:#38bdf8; font-weight:800; margin-right:6px; background:rgba(14,165,233,0.15); padding:2px 6px; border-radius:4px; border:1px solid #0ea5e9;">▶ [ATUAL]</span>`;
+      item.style.borderColor = '#0ea5e9';
+      item.style.background = 'rgba(14,165,233,0.1)';
+    } else if (isSaved) {
+      badgeHtml = `<span style="color:#4ade80; font-weight:800; margin-right:6px; background:rgba(74,222,128,0.15); padding:2px 6px; border-radius:4px; border:1px solid #4ade80;">▶ [ONDE PAROU]</span>`;
+      item.style.borderColor = 'rgba(74,222,128,0.4)';
+    }
+
     item.innerHTML = `
-      <div>
-        <strong>E${ep.episode_num || ''}</strong> - ${ep.title || 'Episódio'}
+      <div style="display:flex; align-items:center; gap:6px;">
+        ${badgeHtml}
+        <strong>E${ep.episode_num || (idx + 1)}</strong> - ${ep.title || 'Episódio'}
       </div>
-      <span style="font-size:12px;color:var(--accent-cyan)">Assistir ▶</span>
+      <span style="font-size:12px;color:var(--accent-cyan); font-weight:700;">Assistir ▶</span>
     `;
+
     item.onclick = () => {
-      // Read series name BEFORE closing the modal (closeMediaModal clears activeModalMedia)
-      const seriesName = activeModalMedia ? (activeModalMedia.name || activeModalMedia.title || '') : '';
-      const ext = ep.container_extension || 'mp4';
-      const epId = ep.id || ep.stream_id;
-      const playExt = (ext && ext.toLowerCase() !== 'mkv') ? ext.toLowerCase() : 'mp4';
-      const url = XtreamApi.getEpisodeUrl(epId, playExt);
-      const epTitle = `${seriesName} - E${ep.episode_num || ''}`;
       closeMediaModal();
-      playStream(url, epTitle, 'series');
+      playSeriesEpisode(seriesId, seriesName, seriesCover, episodes, idx);
     };
     el.episodesList.appendChild(item);
   });
+}
+
+function playSeriesEpisode(seriesId, seriesName, seriesCover, episodesList, index) {
+  if (!episodesList || index < 0 || index >= episodesList.length) return;
+  currentSeriesEpisodes = episodesList;
+  currentSeriesIndex = index;
+  currentSeriesId = seriesId;
+  currentSeriesName = seriesName;
+  currentSeriesCover = seriesCover;
+
+  if (seriesAutoPlayTimer) {
+    clearTimeout(seriesAutoPlayTimer);
+    seriesAutoPlayTimer = null;
+  }
+
+  const ep = episodesList[index];
+  const epId = ep.id || ep.stream_id;
+  const ext = ep.container_extension || 'mp4';
+  const playExt = (ext && ext.toLowerCase() !== 'mkv') ? ext.toLowerCase() : 'mp4';
+  const url = XtreamApi.getEpisodeUrl(epId, playExt);
+  const epTitle = `${seriesName} - E${ep.episode_num || (index + 1)}: ${ep.title || 'Episódio'}`;
+
+  // Salva onde parou
+  SeriesStore.save(seriesId, epId, index, ep.title || '');
+
+  updatePlayerSeriesButtons();
+  playStream(url, epTitle, 'series', [], null, epId, seriesCover);
+}
+
+function playNextEpisode() {
+  if (seriesAutoPlayTimer) {
+    clearTimeout(seriesAutoPlayTimer);
+    seriesAutoPlayTimer = null;
+  }
+  if (currentSeriesEpisodes && currentSeriesIndex + 1 < currentSeriesEpisodes.length) {
+    const nextIdx = currentSeriesIndex + 1;
+    showToast(`▶ Carregando Próximo Episódio...`, 2000);
+    playSeriesEpisode(currentSeriesId, currentSeriesName, currentSeriesCover, currentSeriesEpisodes, nextIdx);
+  } else {
+    showToast('Você chegou ao último episódio desta temporada.', 3000);
+  }
+}
+
+function openInPlayerEpisodesDialog() {
+  const modal = document.getElementById('inplayer-episodes-modal');
+  const list = document.getElementById('inplayer-episodes-list');
+  const title = document.getElementById('inplayer-episodes-title');
+  if (!modal || !list) return;
+
+  if (!currentSeriesEpisodes || currentSeriesEpisodes.length === 0) {
+    showToast('Nenhum episódio carregado.');
+    return;
+  }
+
+  title.textContent = currentSeriesName ? `📑 ${currentSeriesName} - Episódios` : '📑 Escolha o Episódio';
+  list.innerHTML = '';
+
+  const saved = SeriesStore.getLast(currentSeriesId);
+
+  currentSeriesEpisodes.forEach((ep, idx) => {
+    const row = document.createElement('div');
+    row.className = 'episode-item focusable';
+    row.style.cssText = 'padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; border-radius: 10px; cursor: pointer;';
+
+    const isCurrent = idx === currentSeriesIndex;
+    const isSaved = saved && String(saved.epId) === String(ep.id || ep.stream_id);
+
+    let prefix = '';
+    if (isCurrent) {
+      prefix = '<span style="color:#38bdf8; font-weight:800; margin-right:6px; background:rgba(14,165,233,0.15); padding:2px 6px; border-radius:4px; border:1px solid #0ea5e9;">▶ [ATUAL]</span>';
+      row.style.background = 'rgba(14, 165, 233, 0.2)';
+      row.style.border = '1px solid #0ea5e9';
+    } else if (isSaved) {
+      prefix = '<span style="color:#4ade80; font-weight:800; margin-right:6px; background:rgba(74,222,128,0.15); padding:2px 6px; border-radius:4px; border:1px solid #4ade80;">▶ [ONDE PAROU]</span>';
+      row.style.border = '1px solid rgba(74, 222, 128, 0.4)';
+    }
+
+    row.innerHTML = `
+      <div style="font-size:13px; color:#fff; display:flex; align-items:center; gap:6px;">
+        ${prefix}<strong>E${ep.episode_num || (idx + 1)}</strong> - ${ep.title || 'Episódio'}
+      </div>
+      <span style="font-size:12px; color:var(--accent-cyan); font-weight:700;">Assistir ▶</span>
+    `;
+
+    row.onclick = () => {
+      modal.style.display = 'none';
+      playSeriesEpisode(currentSeriesId, currentSeriesName, currentSeriesCover, currentSeriesEpisodes, idx);
+    };
+
+    list.appendChild(row);
+  });
+
+  modal.style.display = 'flex';
+}
+
+function updatePlayerSeriesButtons() {
+  const btnNext = document.getElementById('player-series-next-btn');
+  const btnEps = document.getElementById('player-series-eps-btn');
+
+  if (currentStreamType === 'series' && currentSeriesEpisodes && currentSeriesEpisodes.length > 0) {
+    if (btnEps) btnEps.style.display = 'inline-block';
+    if (btnNext) {
+      if (currentSeriesIndex + 1 < currentSeriesEpisodes.length) {
+        btnNext.style.display = 'inline-block';
+      } else {
+        btnNext.style.display = 'none';
+      }
+    }
+  } else {
+    if (btnNext) btnNext.style.display = 'none';
+    if (btnEps) btnEps.style.display = 'none';
+  }
 }
 
 function closeMediaModal() {
@@ -689,6 +1294,11 @@ function closeMediaModal() {
 let currentLiveVariants = [];
 let currentLiveVariant = null;
 let currentLiveChannelName = '';
+let currentStreamId = null;
+let currentStreamPoster = '';
+let currentStreamUrl = null;
+let currentStreamTitle = null;
+let currentStreamType = null;
 
 function updatePlayerFavBtn() {
   if (!el.playerFavBtn) return;
@@ -808,12 +1418,156 @@ function switchLiveQuality(variant) {
   resetControlsTimeout();
 }
 
+// --- Anti-Freeze Watchdog for Live Streams (Ported from Android PlayerErrorHandler) ---
+const FIVE_MINUTES_MS = 5 * 60 * 1000; // 300.000 ms
+let firstFreezeInWindowTime = 0;
+let freezesInWindowCount = 0;
+let lastHeartbeatTime = 0;
+let lastVideoPos = -1;
+let lastRecoveryTriggerTime = 0;
+let liveWatchdogInterval = null;
+
+function startLiveWatchdog() {
+  stopLiveWatchdog();
+  // Dá 6 segundos de margem inicial para conectar e abrir os primeiros quadros
+  lastHeartbeatTime = Date.now() + 6000;
+  lastVideoPos = -1;
+
+  liveWatchdogInterval = setInterval(() => {
+    if (!el.mainVideo || el.playerOverlay.style.display !== 'flex') return;
+    if (el.mainVideo.paused || el.mainVideo.ended) return;
+
+    // Apenas para canais ao vivo
+    if (!currentLiveVariant) return;
+
+    const pos = el.mainVideo.currentTime;
+    const now = Date.now();
+
+    // Se a posição de reprodução estiver avançando
+    if (pos > 0 && Math.abs(pos - lastVideoPos) > 0.05) {
+      lastVideoPos = pos;
+      lastHeartbeatTime = now;
+    } else {
+      if (now > lastHeartbeatTime) {
+        const stallDuration = now - lastHeartbeatTime;
+        // Congelou por 4.5 segundos:
+        if (stallDuration >= 4500) {
+          triggerLiveAutoRecovery();
+        }
+      }
+    }
+  }, 1000);
+}
+
+function stopLiveWatchdog() {
+  if (liveWatchdogInterval) {
+    clearInterval(liveWatchdogInterval);
+    liveWatchdogInterval = null;
+  }
+}
+
+function triggerLiveAutoRecovery() {
+  const now = Date.now();
+  // Evita disparar duas vezes em menos de 5 segundos
+  if (now - lastRecoveryTriggerTime < 5000) return;
+  lastRecoveryTriggerTime = now;
+
+  // Janela de 5 minutos (300.000 ms)
+  if (firstFreezeInWindowTime > 0 && (now - firstFreezeInWindowTime <= FIVE_MINUTES_MS)) {
+    // Travou novamente dentro de 5 minutos!
+    freezesInWindowCount++;
+  } else {
+    // Primeiro travamento ou já se passaram mais de 5 minutos desde o anterior
+    firstFreezeInWindowTime = now;
+    freezesInWindowCount = 1;
+  }
+
+  // Regra solicitada:
+  // Se congelar 2 vezes dentro de 5 minutos -> troca de qualidade
+  // Se congelar com intervalo maior que 5 minutos -> só reconecta
+  if (freezesInWindowCount >= 2 && currentLiveVariants && currentLiveVariants.length > 1) {
+    const fallback = getFallbackVariant(currentLiveVariant, currentLiveVariants);
+    if (fallback) {
+      showToast(`⚠️ Canal instável (2x em 5 min). Alternando para ${fallback.quality}...`, 4000);
+      freezesInWindowCount = 0;
+      firstFreezeInWindowTime = 0;
+      lastHeartbeatTime = Date.now() + 6000;
+      switchLiveQuality(fallback);
+      return;
+    }
+  }
+
+  // Se for o 1º travamento ou se passaram mais de 5 minutos: SÓ RECONECTA
+  showToast('⚡ Canal travou. Reconectando transmissão...', 3000);
+  reconnectLiveStream();
+}
+
+function getFallbackVariant(currentVariant, variants) {
+  if (!currentVariant || !variants || variants.length <= 1) return null;
+  const currentId = String(currentVariant.stream_id || '');
+  let currentIndex = -1;
+
+  for (let i = 0; i < variants.length; i++) {
+    if (String(variants[i].stream_id) === currentId) {
+      currentIndex = i;
+      break;
+    }
+  }
+
+  // Seleciona a próxima qualidade mais leve (ex: FHD -> HD -> SD)
+  if (currentIndex >= 0 && currentIndex + 1 < variants.length) {
+    return variants[currentIndex + 1];
+  }
+
+  // Se já for a última, tenta a primeira diferente da atual
+  for (const v of variants) {
+    if (String(v.stream_id) !== currentId) {
+      return v;
+    }
+  }
+  return null;
+}
+
+function manualReconnect() {
+  freezesInWindowCount = 0;
+  firstFreezeInWindowTime = 0;
+  showToast('🔄 Reconectando transmissão...', 2500);
+  reconnectLiveStream();
+}
+
+function reconnectLiveStream() {
+  if (!currentLiveVariant) return;
+  lastVideoPos = -1;
+  lastHeartbeatTime = Date.now() + 6000;
+
+  const streamUrl = XtreamApi.getLiveUrl(currentLiveVariant.stream_id);
+  const sep = streamUrl.includes('?') ? '&' : '?';
+  const freshUrl = `${streamUrl}${sep}_t=${Date.now()}`;
+  const proxiedUrl = XtreamApi.wrapUrl(freshUrl);
+
+  if (hlsInstance) {
+    hlsInstance.loadSource(proxiedUrl);
+    hlsInstance.attachMedia(el.mainVideo);
+    el.mainVideo.play().catch(() => {});
+  } else {
+    el.mainVideo.src = proxiedUrl;
+    el.mainVideo.load();
+    el.mainVideo.play().catch(() => {});
+  }
+}
+
 // --- Video Player ---
-function playStream(url, title, type, variants = [], activeVariant = null) {
+function playStream(url, title, type, variants = [], activeVariant = null, customId = null, customPoster = null, resumePosition = 0) {
   if (!url) {
     showToast('Link do vídeo indisponível.');
     return;
   }
+
+  currentStreamUrl = url;
+  currentStreamTitle = title;
+  currentStreamType = type;
+  currentStreamId = customId || (currentLiveVariant ? currentLiveVariant.stream_id : null);
+  currentStreamPoster = customPoster || '';
 
   el.playerOverlay.style.display = 'flex';
   el.playerTitle.textContent = title || 'Reprodução';
@@ -845,6 +1599,40 @@ function playStream(url, title, type, variants = [], activeVariant = null) {
   el.mainVideo.removeAttribute('src');
   el.mainVideo.load();
 
+  // Resume configuration (Filmes e Séries)
+  let targetResumePos = 0;
+  if (type !== 'live' && currentStreamId) {
+    if (resumePosition && resumePosition > 0) {
+      targetResumePos = resumePosition;
+    } else {
+      const saved = ResumeStore.get(currentStreamId);
+      if (saved && saved.pos > 5) {
+        targetResumePos = saved.pos;
+      }
+    }
+  }
+
+  let hasResumed = false;
+  const seekTarget = (targetResumePos > 5) ? Math.max(0, targetResumePos - 3) : 0;
+
+  const performResume = () => {
+    if (hasResumed || seekTarget <= 0) return;
+    hasResumed = true;
+    try {
+      el.mainVideo.currentTime = seekTarget;
+      showToast(`▶ Continuando de ${formatTime(seekTarget)}...`, 2500);
+    } catch (e) {
+      console.warn('Resume seek error:', e);
+    }
+  };
+
+  el.mainVideo.onloadedmetadata = () => {
+    performResume();
+  };
+  el.mainVideo.oncanplay = () => {
+    performResume();
+  };
+
   // Ensure HTTPS if the page is on HTTPS
   let streamUrl = url;
   if (window.location.protocol === 'https:' && streamUrl.startsWith('http://')) {
@@ -868,6 +1656,7 @@ function playStream(url, title, type, variants = [], activeVariant = null) {
     hlsInstance.attachMedia(el.mainVideo);
     hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
       el.mainVideo.play().catch(() => {});
+      performResume();
     });
     hlsInstance.on(Hls.Events.ERROR, (event, data) => {
       if (data.fatal) {
@@ -911,6 +1700,13 @@ function playStream(url, title, type, variants = [], activeVariant = null) {
     }
   }
 
+  if (type === 'live') {
+    startLiveWatchdog();
+  } else {
+    stopLiveWatchdog();
+  }
+
+  updatePlayerSeriesButtons();
   resetControlsTimeout();
 }
 
@@ -926,6 +1722,27 @@ function resetControlsTimeout() {
 }
 
 function stopPlayer() {
+  stopLiveWatchdog();
+  firstFreezeInWindowTime = 0;
+  freezesInWindowCount = 0;
+  currentLiveVariant = null;
+
+  if (seriesAutoPlayTimer) {
+    clearTimeout(seriesAutoPlayTimer);
+    seriesAutoPlayTimer = null;
+  }
+  const inplayerModal = document.getElementById('inplayer-episodes-modal');
+  if (inplayerModal) inplayerModal.style.display = 'none';
+  updatePlayerSeriesButtons();
+
+  // Salvar última posição antes de fechar se for VOD (filme/série)
+  if (currentStreamType !== 'live' && el.mainVideo && el.mainVideo.duration > 0 && currentStreamId && el.mainVideo.currentTime >= 5) {
+    ResumeStore.save(currentStreamId, currentStreamTitle, currentStreamPoster, el.mainVideo.currentTime, el.mainVideo.duration, currentStreamType, currentStreamUrl);
+    if (currentCategory === '__resume__') {
+      loadCategoryItems('__resume__');
+    }
+  }
+
   if (hlsInstance) {
     hlsInstance.destroy();
     hlsInstance = null;
@@ -940,6 +1757,10 @@ function stopPlayer() {
 
 // --- Player Controls Events ---
 el.playerBackBtn.onclick = stopPlayer;
+
+if (el.btnPlayerReconnect) {
+  el.btnPlayerReconnect.onclick = () => manualReconnect();
+}
 
 el.playerPlayPause.onclick = () => {
   if (el.mainVideo.paused) {
@@ -959,6 +1780,32 @@ el.mainVideo.ontimeupdate = () => {
   el.playerTimeline.value = (current / total) * 100;
   el.playerTimeCurrent.textContent = formatTime(current);
   el.playerTimeTotal.textContent = formatTime(total);
+
+  // Auto-salvar progresso para Continuar Assistindo a cada ~2.5 segundos
+  if (currentStreamType !== 'live' && total > 0 && currentStreamId && current >= 5) {
+    if (!el.mainVideo._lastResumeSave || (Date.now() - el.mainVideo._lastResumeSave) > 2500) {
+      el.mainVideo._lastResumeSave = Date.now();
+      ResumeStore.save(currentStreamId, currentStreamTitle, currentStreamPoster, current, total, currentStreamType, currentStreamUrl);
+    }
+  }
+};
+
+el.mainVideo.onended = () => {
+  if (currentStreamType !== 'live' && currentStreamId) {
+    ResumeStore.remove(currentStreamId);
+    if (currentCategory === '__resume__') {
+      loadCategoryItems('__resume__');
+    }
+  }
+
+  // Auto-play próximo episódio para séries (3 segundos de contagem)
+  if (currentStreamType === 'series' && currentSeriesEpisodes && currentSeriesIndex + 1 < currentSeriesEpisodes.length) {
+    showToast('▶ Episódio finalizado! Carregando próximo em 3s...', 3000);
+    if (seriesAutoPlayTimer) clearTimeout(seriesAutoPlayTimer);
+    seriesAutoPlayTimer = setTimeout(() => {
+      playNextEpisode();
+    }, 3000);
+  }
 };
 
 el.playerTimeline.oninput = () => {
@@ -1039,10 +1886,60 @@ function setupEvents() {
     }
   };
 
+  // Series In-Player Buttons
+  const btnSeriesNext = document.getElementById('player-series-next-btn');
+  if (btnSeriesNext) {
+    btnSeriesNext.onclick = (e) => {
+      e.stopPropagation();
+      playNextEpisode();
+    };
+  }
+
+  const btnSeriesEps = document.getElementById('player-series-eps-btn');
+  if (btnSeriesEps) {
+    btnSeriesEps.onclick = (e) => {
+      e.stopPropagation();
+      openInPlayerEpisodesDialog();
+    };
+  }
+
+  const btnCloseInplayer = document.getElementById('btn-close-inplayer-eps');
+  if (btnCloseInplayer) {
+    btnCloseInplayer.onclick = (e) => {
+      e.stopPropagation();
+      const modal = document.getElementById('inplayer-episodes-modal');
+      if (modal) modal.style.display = 'none';
+    };
+  }
+
   // Close modals on overlay click
   window.onclick = (e) => {
     if (e.target === el.detailModal) closeMediaModal();
+    const inplayerModal = document.getElementById('inplayer-episodes-modal');
+    if (e.target === inplayerModal) inplayerModal.style.display = 'none';
   };
+
+  // Drag & Drop global para filmes e vídeos no computador
+  window.addEventListener('dragover', (e) => e.preventDefault());
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      const file = e.dataTransfer.files[0];
+      if (file.type.startsWith('video/') || /\.(mp4|mkv|avi|mov|webm|ts|m3u8|wmv|flv)$/i.test(file.name)) {
+        handleSelectedLocalFile(file);
+      }
+    }
+  });
+
+  // Local Video Picker for 100% Offline Playback
+  if (el.localVideoInput) {
+    el.localVideoInput.onchange = (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) {
+        handleSelectedLocalFile(file);
+      }
+    };
+  }
 }
 
 // --- TV Remote Control (D-pad & Key Codes) ---
